@@ -1,11 +1,11 @@
 [package]
 name = "mojo-rust-sdk"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-solana-sdk = "2.0"
-solana-client = "2.0"
+solana-sdk = "1.18"
+solana-client = "1.18"
 solana-program = "2.0"
 borsh = "1.5"
 anyhow = "1.0"
@@ -17,11 +17,11 @@ solana-pubkey = "2.2.1"
 solana-signer = "2.2.1"
 solana-system-interface = "1.0.0"
 solana-transaction = "2.2.1"
-solana-message = "2.2.1"
+solana-message = "1.18"
 solana-sdk-ids = "2.2.1"
 # spl-token-2022 = { version = "8.0.1", features = ["no-entrypoint"]}
 # spl-associated-token-account = "7.0.0"
-solana-rpc-client = "3.0.3"
+solana-rpc-client = "1.18"
 solana-address = "1.0.0"
 solana-account = "2.2.1"
 sha2 = "0.10"

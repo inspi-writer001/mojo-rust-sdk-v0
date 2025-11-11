@@ -60,7 +60,7 @@ impl World {
             bytes_of(initial_state),
         );
 
-        client.send_ixs(payer, vec![ix])?;
+        client.send_ixs(payer, vec![ix, delegate_ix])?;
         Ok(state_pda)
     }
 

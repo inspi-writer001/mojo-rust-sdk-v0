@@ -27,8 +27,36 @@ macro_rules! mojo {
 mod test_macro {
 
     #[test]
+    fn mojo_preferred() {
+        mojo! {
+            pub struct Person {
+                pub height: [u8; 8],
+                pub length: [u8; 8],
+                pub can_fly: [u8; 1],
+            }
+        }
+
+        let new_guy = Person {
+            height: 259u64.to_le_bytes(),
+            length: 5674u64.to_le_bytes(),
+            can_fly: 0u8.to_le_bytes(),
+        };
+
+        println!("Bytes: {:?}", new_guy.to_bytes());
+        println!("Size: {}", new_guy.len());
+
+        assert_eq!(
+            new_guy.to_bytes(),
+            [3, 1, 0, 0, 0, 0, 0, 0, 42, 22, 0, 0, 0, 0, 0, 0, 0],
+            "Values aren't equal"
+        );
+
+        assert_eq!(new_guy.len(), 17, "Length aren't the same");
+    }
+
+    #[test]
     fn mojo_enumish() {
-        // ✅ Use a newtype struct instead of enum
+        // since we can't derive Pod on Enums... users may need to write more code to make their enum fit.. and probably some padding
         #[repr(C)]
         #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
         pub struct FlyAbility(u8);
@@ -65,33 +93,5 @@ mod test_macro {
         );
 
         assert_eq!(person.len(), 24, "Length aren't the same");
-    }
-
-    #[test]
-    fn mojo_preferred() {
-        mojo! {
-            pub struct Person {
-                pub height: [u8; 8],
-                pub length: [u8; 8],
-                pub can_fly: [u8; 1],
-            }
-        }
-
-        let new_guy = Person {
-            height: 259u64.to_le_bytes(),
-            length: 5674u64.to_le_bytes(),
-            can_fly: 0u8.to_le_bytes(),
-        };
-
-        println!("Bytes: {:?}", new_guy.to_bytes());
-        println!("Size: {}", new_guy.len());
-
-        assert_eq!(
-            new_guy.to_bytes(),
-            [3, 1, 0, 0, 0, 0, 0, 0, 42, 22, 0, 0, 0, 0, 0, 0, 0],
-            "Values aren't equal"
-        );
-
-        assert_eq!(new_guy.len(), 17, "Length aren't the same");
     }
 }

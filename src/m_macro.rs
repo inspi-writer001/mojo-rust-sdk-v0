@@ -20,6 +20,28 @@ macro_rules! mojo {
             }
         }
 
+
+    };
+}
+
+#[macro_export]
+macro_rules! mojo_enum {
+    // Usage: mojo_enum! { pub enum Name : u8 { Variant = 0, ... } }
+    ($vis:vis enum $name:ident : $backing_type:ty {
+        $($variant:ident = $val:expr),* $(,)?
+    }) => {
+        // 1. Create the wrapper struct
+        // repr(transparent) ensures it has the exact same layout as the backing type (e.g., u8)
+        #[repr(transparent)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::Pod, bytemuck::Zeroable)]
+        $vis struct $name($backing_type);
+
+        // 2. Create the constants inside the struct namespace
+        impl $name {
+            $(
+                pub const $variant: Self = Self($val);
+            )*
+        }
     };
 }
 
@@ -54,24 +76,19 @@ mod test_macro {
         assert_eq!(new_guy.len(), 17, "Length aren't the same");
     }
 
+    #[allow(unused)]
     #[test]
     fn mojo_enumish() {
-        // since we can't derive Pod on Enums... users may need to write more code to make their enum fit.. and probably some padding
-        #[repr(C)]
-        #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-        pub struct FlyAbility(u8);
-
-        impl FlyAbility {
-            pub const CAN_FLY: Self = Self(0);
-            pub const CAN_NOT_FLY: Self = Self(1);
-        }
+        mojo_enum! { pub enum FlyAbility: u8 {
+            CAN_FLY = 0,
+            CANNOT_FLY = 1,
+        }}
 
         mojo! {
             pub struct Person {
                 pub height: u64,
                 pub length: u64,
                 pub can_fly: FlyAbility,
-
                 _padding: [u8; 7]
             }
         }

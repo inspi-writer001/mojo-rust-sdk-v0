@@ -8,8 +8,8 @@ use solana_transaction::{self, Transaction};
 pub const BASE_LAYER_RPC_DEVNET: &str = "https://api.devnet.solana.com";
 pub const ER_LAYER_RPC_DEVNET: &str = "https://devnet-eu.magicblock.app";
 
-pub const BASE_LAYER_RPC_MAINNET: &str = "https://api.devnet.solana.com";
-pub const ER_LAYER_RPC_MAINNET: &str = "https://devnet-eu.magicblock.app";
+pub const BASE_LAYER_RPC_MAINNET: &str = "https://api.mainnet-beta.solana.com";
+pub const ER_LAYER_RPC_MAINNET: &str = "https://mainnet-beta-eu.magicblock.app";
 
 #[derive(Clone, Copy)]
 #[repr(u8)]

@@ -20,7 +20,6 @@ solana-sdk-ids = "2.2.1"
 solana-rpc-client = "2.2.1"
 solana-address = "1.0.0"
 solana-account = "2.2.1"
-borsh = "1.5"
 anyhow = "1.0"
 sha2 = "0.10.9"
 bytemuck = { version = "1.15", features = ["derive"] }

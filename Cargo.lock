@@ -1876,7 +1876,6 @@ name = "mojo-rust-sdk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "borsh 1.5.7",
  "bytemuck",
  "sha2 0.10.9",
  "solana-account",

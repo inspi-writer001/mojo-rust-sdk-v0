@@ -1,6 +1,7 @@
 use anyhow::{ensure, Result};
 use bytemuck::{bytes_of, from_bytes, Pod, Zeroable};
 use solana_client::rpc_client::RpcClient;
+use solana_keypair::Keypair;
 use solana_pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_signer::Signer;
@@ -9,6 +10,10 @@ use crate::{
     client::{RpcLayer, RpcType, WorldClient, ER_LAYER_RPC_DEVNET, ER_LAYER_RPC_MAINNET},
     instructions::{create_world_ix, delegate_account_ix, write_to_world_ix},
     pda::{find_world_pda, world_seed_hash},
+    profile::{
+        create_mpl_core_asset_ix, load_image_data, validate_image, ArweaveUploader, ImageSource,
+        ProfilePicture,
+    },
 };
 
 pub trait MojoState: Pod + Zeroable + Copy {}
@@ -117,5 +122,51 @@ impl World {
 
         let state = *from_bytes::<T>(&data[..required_len]);
         Ok(state)
+    }
+
+    /// Creates a profile picture NFT from a local file or URL
+    pub async fn create_profile_picture(
+        &self,
+        payer: &impl Signer,
+        image_source: ImageSource,
+        name: &str,
+        description: Option<&str>,
+        uploader: Option<ArweaveUploader>,
+    ) -> Result<ProfilePicture> {
+        // 1. Load and validate image
+        let image_data = load_image_data(&image_source).await?;
+        validate_image(&image_data)?;
+
+        // 2. Upload image to Arweave
+        let uploader = uploader.unwrap_or_default();
+        let image_tx_id = uploader.upload(&image_data, Some("image/png")).await?;
+        let image_uri = uploader.uri_from_tx_id(&image_tx_id);
+
+        // 3. Create metadata JSON
+        let metadata = crate::profile::Metadata::new(name, description, &image_uri);
+
+        // 4. Upload metadata to Arweave
+        let metadata_json = serde_json::to_vec(&metadata)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize metadata: {}", e))?;
+        let metadata_tx_id = uploader
+            .upload(&metadata_json, Some("application/json"))
+            .await?;
+        let metadata_uri = uploader.uri_from_tx_id(&metadata_tx_id);
+
+        // 5. Create mpl-core asset
+        let asset_keypair = Keypair::new();
+        let asset_pubkey = asset_keypair.pubkey();
+
+        let create_ix =
+            create_mpl_core_asset_ix(&asset_pubkey, payer.pubkey(), name, &metadata_uri)?;
+
+        // 6. Send transaction
+        WorldClient::new(&self.network).send_ixs(payer, vec![create_ix], RpcLayer::BaseLayer)?;
+
+        Ok(ProfilePicture {
+            asset: asset_pubkey,
+            collection: None,
+            owner: payer.pubkey(),
+        })
     }
 }

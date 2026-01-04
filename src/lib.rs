@@ -5,4 +5,5 @@ pub mod instructions;
 pub mod m_macro;
 pub mod mojo_types;
 pub mod pda;
+pub mod profile;
 pub mod world;

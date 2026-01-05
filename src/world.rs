@@ -127,28 +127,24 @@ impl World {
         Ok(state)
     }
 
-    /// Creates a profile picture NFT from a local file or URL
     pub async fn create_profile_picture(
         &self,
-        payer: &impl Signer,
+        user: &impl Signer,
+        payer: Option<&impl Signer>,
         image_source: ImageSource,
         name: &str,
         description: Option<&str>,
         uploader: Option<ArweaveUploader>,
     ) -> Result<ProfilePicture> {
-        // 1. Load and validate image
         let image_data = load_image_data(&image_source).await?;
         validate_image(&image_data)?;
 
-        // 2. Upload image to Arweave
         let uploader = uploader.unwrap_or_default();
         let image_tx_id = uploader.upload(&image_data, Some("image/png")).await?;
         let image_uri = uploader.uri_from_tx_id(&image_tx_id);
 
-        // 3. Create metadata JSON
         let metadata = crate::profile::Metadata::new(name, description, &image_uri);
 
-        // 4. Upload metadata to Arweave
         let metadata_json = serde_json::to_vec(&metadata)
             .map_err(|e| anyhow::anyhow!("Failed to serialize metadata: {}", e))?;
         let metadata_tx_id = uploader
@@ -156,20 +152,40 @@ impl World {
             .await?;
         let metadata_uri = uploader.uri_from_tx_id(&metadata_tx_id);
 
-        // 5. Create mpl-core asset
         let asset_keypair = Keypair::new();
         let asset_pubkey = asset_keypair.pubkey();
 
-        let create_ix =
-            create_mpl_core_asset_ix(&asset_pubkey, payer.pubkey(), name, &metadata_uri)?;
+        let effective_payer = payer.map(|p| p.pubkey()).unwrap_or_else(|| user.pubkey());
+        let create_ix = create_mpl_core_asset_ix(
+            &asset_pubkey,
+            user.pubkey(),
+            effective_payer,
+            name,
+            &metadata_uri,
+        )?;
 
-        // 6. Send transaction
-        WorldClient::new(&self.network).send_ixs(payer, vec![create_ix], RpcLayer::BaseLayer)?;
+        let signers: Vec<&dyn Signer> = vec![user as &dyn Signer];
+
+        if let Some(p) = payer {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                p,
+                &signers,
+                vec![create_ix],
+                RpcLayer::BaseLayer,
+            )?;
+        } else {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                user,
+                &signers,
+                vec![create_ix],
+                RpcLayer::BaseLayer,
+            )?;
+        }
 
         Ok(ProfilePicture {
             asset: asset_pubkey,
             collection: None,
-            owner: payer.pubkey(),
+            owner: user.pubkey(),
         })
     }
 

@@ -10,6 +10,7 @@ use crate::profile::types::Metadata;
 
 pub fn create_mpl_core_asset_ix(
     asset: &Pubkey,
+    owner: Pubkey,
     payer: Pubkey,
     name: &str,
     uri: &str,
@@ -17,6 +18,7 @@ pub fn create_mpl_core_asset_ix(
     let mut builder = CreateV1Builder::new();
     builder
         .asset(*asset)
+        .owner(Some(owner))
         .payer(payer)
         .name(name.to_string())
         .uri(uri.to_string());

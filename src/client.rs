@@ -40,6 +40,16 @@ impl WorldClient {
         instructions: Vec<Instruction>,
         layer: RpcLayer,
     ) -> Result<Signature> {
+        self.send_ixs_with_payer(payer, &[payer], instructions, layer)
+    }
+
+    pub fn send_ixs_with_payer(
+        &mut self,
+        payer: &impl Signer,
+        signers: &[&dyn Signer],
+        instructions: Vec<Instruction>,
+        layer: RpcLayer,
+    ) -> Result<Signature> {
         let rpc = match self.cluster {
             RpcType::Devnet => match layer {
                 RpcLayer::BaseLayer => RpcClient::new(BASE_LAYER_RPC_DEVNET),
@@ -52,10 +62,16 @@ impl WorldClient {
         };
 
         let blockhash = rpc.get_latest_blockhash()?;
+
+        let mut all_signers: Vec<&dyn Signer> = signers.to_vec();
+        if !all_signers.iter().any(|s| s.pubkey() == payer.pubkey()) {
+            all_signers.push(payer);
+        }
+
         let tx = Transaction::new_signed_with_payer(
             &instructions,
             Some(&payer.pubkey()),
-            &[payer],
+            &all_signers,
             blockhash,
         );
         let tx = rpc.send_and_confirm_transaction(&tx)?;

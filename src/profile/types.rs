@@ -24,7 +24,18 @@ pub struct ProfilePicture {
     pub owner: Pubkey,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone)]
+pub struct ProfilePictureData {
+    pub asset: Pubkey,
+    pub collection: Option<Pubkey>,
+    pub owner: Pubkey,
+    pub name: String,
+    pub description: String,
+    pub image_uri: String,
+    pub metadata_uri: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
     pub name: String,
     pub description: String,
@@ -32,7 +43,7 @@ pub struct Metadata {
     pub properties: MetadataProperties,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct MetadataProperties {
     #[serde(rename = "type")]
     pub asset_type: String,

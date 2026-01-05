@@ -7,12 +7,15 @@ use solana_sdk::signature::Signature;
 use solana_signer::Signer;
 
 use crate::{
-    client::{RpcLayer, RpcType, WorldClient, ER_LAYER_RPC_DEVNET, ER_LAYER_RPC_MAINNET},
+    client::{
+        RpcLayer, RpcType, WorldClient, BASE_LAYER_RPC_DEVNET, BASE_LAYER_RPC_MAINNET,
+        ER_LAYER_RPC_DEVNET, ER_LAYER_RPC_MAINNET,
+    },
     instructions::{create_world_ix, delegate_account_ix, write_to_world_ix},
     pda::{find_world_pda, world_seed_hash},
     profile::{
-        create_mpl_core_asset_ix, load_image_data, validate_image, ArweaveUploader, ImageSource,
-        ProfilePicture,
+        create_mpl_core_asset_ix, fetch_metadata_from_uri, fetch_mpl_core_asset, load_image_data,
+        validate_image, ArweaveUploader, ImageSource, ProfilePicture, ProfilePictureData,
     },
 };
 
@@ -167,6 +170,31 @@ impl World {
             asset: asset_pubkey,
             collection: None,
             owner: payer.pubkey(),
+        })
+    }
+
+    pub async fn get_profile_picture(&self, asset: &Pubkey) -> Result<ProfilePictureData> {
+        let rpc = match self.network {
+            RpcType::Devnet => RpcClient::new(BASE_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => RpcClient::new(BASE_LAYER_RPC_MAINNET),
+        };
+
+        let mpl_asset = fetch_mpl_core_asset(&rpc, asset)?;
+
+        let owner = mpl_asset.base.owner;
+        let collection = None;
+        let metadata_uri = mpl_asset.base.uri;
+
+        let metadata = fetch_metadata_from_uri(&metadata_uri).await?;
+
+        Ok(ProfilePictureData {
+            asset: *asset,
+            collection,
+            owner,
+            name: metadata.name,
+            description: metadata.description,
+            image_uri: metadata.image,
+            metadata_uri,
         })
     }
 }

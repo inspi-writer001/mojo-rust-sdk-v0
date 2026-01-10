@@ -6,7 +6,8 @@ pub const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
 
 pub async fn load_image_data(source: &ImageSource) -> Result<Vec<u8>> {
     match source {
-        ImageSource::LocalFile(path) => std::fs::read(path)
+        ImageSource::LocalFile(path) => tokio::fs::read(path)
+            .await
             .map_err(|e| WorldError::ImageReadError(format!("Failed to read file: {}", e)).into()),
         ImageSource::Url(url) => {
             let response = reqwest::get(url).await.map_err(|e| {

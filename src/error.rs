@@ -20,4 +20,12 @@ pub enum WorldError {
     NftCreationError(String),
     #[error("Metadata upload failed: {0}")]
     MetadataUploadError(String),
+    #[error("Account not found: {0}")]
+    AccountNotFound(String),
+    #[error("Invalid asset data: {0}")]
+    InvalidAssetData(String),
+    #[error("Failed to fetch metadata: {0}")]
+    MetadataFetchError(String),
+    #[error("Failed to deserialize asset: {0}")]
+    AssetDeserializationError(String),
 }

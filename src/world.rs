@@ -7,12 +7,15 @@ use solana_sdk::signature::Signature;
 use solana_signer::Signer;
 
 use crate::{
-    client::{RpcLayer, RpcType, WorldClient, ER_LAYER_RPC_DEVNET, ER_LAYER_RPC_MAINNET},
+    client::{
+        RpcLayer, RpcType, WorldClient, BASE_LAYER_RPC_DEVNET, BASE_LAYER_RPC_MAINNET,
+        ER_LAYER_RPC_DEVNET, ER_LAYER_RPC_MAINNET,
+    },
     instructions::{create_world_ix, delegate_account_ix, write_to_world_ix},
     pda::{find_world_pda, world_seed_hash},
     profile::{
-        create_mpl_core_asset_ix, load_image_data, validate_image, ArweaveUploader, ImageSource,
-        ProfilePicture,
+        create_mpl_core_asset_ix, fetch_metadata_from_uri, fetch_mpl_core_asset, load_image_data,
+        validate_image, ArweaveUploader, ImageSource, ProfilePicture, ProfilePictureData,
     },
 };
 
@@ -124,28 +127,24 @@ impl World {
         Ok(state)
     }
 
-    /// Creates a profile picture NFT from a local file or URL
     pub async fn create_profile_picture(
         &self,
-        payer: &impl Signer,
+        user: &impl Signer,
+        payer: Option<&impl Signer>,
         image_source: ImageSource,
         name: &str,
         description: Option<&str>,
         uploader: Option<ArweaveUploader>,
     ) -> Result<ProfilePicture> {
-        // 1. Load and validate image
         let image_data = load_image_data(&image_source).await?;
         validate_image(&image_data)?;
 
-        // 2. Upload image to Arweave
         let uploader = uploader.unwrap_or_default();
         let image_tx_id = uploader.upload(&image_data, Some("image/png")).await?;
         let image_uri = uploader.uri_from_tx_id(&image_tx_id);
 
-        // 3. Create metadata JSON
         let metadata = crate::profile::Metadata::new(name, description, &image_uri);
 
-        // 4. Upload metadata to Arweave
         let metadata_json = serde_json::to_vec(&metadata)
             .map_err(|e| anyhow::anyhow!("Failed to serialize metadata: {}", e))?;
         let metadata_tx_id = uploader
@@ -153,20 +152,65 @@ impl World {
             .await?;
         let metadata_uri = uploader.uri_from_tx_id(&metadata_tx_id);
 
-        // 5. Create mpl-core asset
         let asset_keypair = Keypair::new();
         let asset_pubkey = asset_keypair.pubkey();
 
-        let create_ix =
-            create_mpl_core_asset_ix(&asset_pubkey, payer.pubkey(), name, &metadata_uri)?;
+        let effective_payer = payer.map(|p| p.pubkey()).unwrap_or_else(|| user.pubkey());
+        let create_ix = create_mpl_core_asset_ix(
+            &asset_pubkey,
+            user.pubkey(),
+            effective_payer,
+            name,
+            &metadata_uri,
+        )?;
 
-        // 6. Send transaction
-        WorldClient::new(&self.network).send_ixs(payer, vec![create_ix], RpcLayer::BaseLayer)?;
+        let signers: Vec<&dyn Signer> = vec![user as &dyn Signer];
+
+        if let Some(p) = payer {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                p,
+                &signers,
+                vec![create_ix],
+                RpcLayer::BaseLayer,
+            )?;
+        } else {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                user,
+                &signers,
+                vec![create_ix],
+                RpcLayer::BaseLayer,
+            )?;
+        }
 
         Ok(ProfilePicture {
             asset: asset_pubkey,
             collection: None,
-            owner: payer.pubkey(),
+            owner: user.pubkey(),
+        })
+    }
+
+    pub async fn get_profile_picture(&self, asset: &Pubkey) -> Result<ProfilePictureData> {
+        let rpc = match self.network {
+            RpcType::Devnet => RpcClient::new(BASE_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => RpcClient::new(BASE_LAYER_RPC_MAINNET),
+        };
+
+        let mpl_asset = fetch_mpl_core_asset(&rpc, asset)?;
+
+        let owner = mpl_asset.base.owner;
+        let collection = None;
+        let metadata_uri = mpl_asset.base.uri;
+
+        let metadata = fetch_metadata_from_uri(&metadata_uri).await?;
+
+        Ok(ProfilePictureData {
+            asset: *asset,
+            collection,
+            owner,
+            name: metadata.name,
+            description: metadata.description,
+            image_uri: metadata.image,
+            metadata_uri,
         })
     }
 }

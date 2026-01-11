@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use mpl_core::instructions::CreateV1Builder;
+use mpl_core::instructions::{CreateV1Builder, UpdateV1Builder};
 use mpl_core::Asset;
 use solana_client::rpc_client::RpcClient;
 use solana_instruction::Instruction;
@@ -26,6 +26,31 @@ pub fn create_mpl_core_asset_ix(
     let create_ix = builder.instruction();
 
     Ok(create_ix)
+}
+
+pub fn update_mpl_core_asset_ix(
+    asset: &Pubkey,
+    authority: Pubkey,
+    payer: Pubkey,
+    new_name: Option<String>,
+    new_uri: Option<String>,
+) -> Result<Instruction> {
+    let mut builder = UpdateV1Builder::new();
+    builder
+        .asset(*asset)
+        .payer(payer)
+        .authority(Some(authority));
+
+    if let Some(name) = new_name {
+        builder.new_name(name);
+    }
+
+    if let Some(uri) = new_uri {
+        builder.new_uri(uri);
+    }
+
+    let ix = builder.instruction();
+    Ok(ix)
 }
 
 pub fn fetch_mpl_core_asset(rpc: &RpcClient, asset: &Pubkey) -> Result<Asset> {

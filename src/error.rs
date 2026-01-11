@@ -28,4 +28,6 @@ pub enum WorldError {
     MetadataFetchError(String),
     #[error("Failed to deserialize asset: {0}")]
     AssetDeserializationError(String),
+    #[error("Not authorized to modify asset: {0}")]
+    NotAuthorized(String),
 }

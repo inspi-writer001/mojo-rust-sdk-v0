@@ -36,16 +36,16 @@ impl WorldClient {
 
     pub fn send_ixs(
         &mut self,
-        payer: &impl Signer,
+        payer: &dyn Signer,
         instructions: Vec<Instruction>,
         layer: RpcLayer,
     ) -> Result<Signature> {
-        self.send_ixs_with_payer(payer, &[payer], instructions, layer)
+        self.send_ixs_with_payer(payer, &[], instructions, layer)
     }
 
     pub fn send_ixs_with_payer(
         &mut self,
-        payer: &impl Signer,
+        payer: &dyn Signer,
         signers: &[&dyn Signer],
         instructions: Vec<Instruction>,
         layer: RpcLayer,
@@ -64,9 +64,7 @@ impl WorldClient {
         let blockhash = rpc.get_latest_blockhash()?;
 
         let mut all_signers: Vec<&dyn Signer> = signers.to_vec();
-        if !all_signers.iter().any(|s| s.pubkey() == payer.pubkey()) {
-            all_signers.push(payer);
-        }
+        all_signers.push(payer);
 
         let tx = Transaction::new_signed_with_payer(
             &instructions,

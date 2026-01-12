@@ -6,6 +6,16 @@ pub enum WorldError {
     RpcError(String),
     #[error("Serialization Error")]
     SerializationError,
+    #[error("Unexpected error: {0}")]
+    Other(String),
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Image(#[from] image::ImageError),
+    #[error(transparent)]
+    SerdeJson(#[from] serde_json::Error),
     #[error("Image upload failed: {0}")]
     ImageUploadError(String),
     #[error("Invalid image format: {0}. Supported formats: PNG, JPG, GIF, WebP")]
@@ -28,4 +38,6 @@ pub enum WorldError {
     MetadataFetchError(String),
     #[error("Failed to deserialize asset: {0}")]
     AssetDeserializationError(String),
+    #[error(transparent)]
+    Anyhow(#[from] anyhow::Error),
 }

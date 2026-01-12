@@ -7,6 +7,11 @@ use solana_sdk::signature::Signature;
 use solana_signer::Signer;
 
 use crate::{
+    badges::{
+        create_mpl_core_badge_collection_ix, create_mpl_core_badge_ix, update_mpl_core_badge_ix,
+        BadgeCollection, BadgeCollectionMetadata, BadgeMetadata, BadgeMint, BadgeTemplate,
+        QualifyingAction,
+    },
     client::{
         RpcLayer, RpcType, WorldClient, BASE_LAYER_RPC_DEVNET, BASE_LAYER_RPC_MAINNET,
         ER_LAYER_RPC_DEVNET, ER_LAYER_RPC_MAINNET,
@@ -14,9 +19,10 @@ use crate::{
     instructions::{create_world_ix, delegate_account_ix, write_to_world_ix},
     pda::{find_world_pda, world_seed_hash},
     profile::{
-        create_mpl_core_asset_ix, fetch_metadata_from_uri, fetch_mpl_core_asset, load_image_data,
-        validate_image, ArweaveUploader, ImageSource, ProfilePicture, ProfilePictureData,
+        create_mpl_core_asset_ix, fetch_metadata_from_uri, fetch_mpl_core_asset, ArweaveUploader,
+        ImageSource, ProfilePicture, ProfilePictureData,
     },
+    utils::{send_with_signers, upload_metadata},
 };
 
 pub trait MojoState: Pod + Zeroable + Copy {}
@@ -136,51 +142,23 @@ impl World {
         description: Option<&str>,
         uploader: Option<ArweaveUploader>,
     ) -> Result<ProfilePicture> {
-        let image_data = load_image_data(&image_source).await?;
-        validate_image(&image_data)?;
-
-        let uploader = uploader.unwrap_or_default();
-        let image_tx_id = uploader.upload(&image_data, Some("image/png")).await?;
-        let image_uri = uploader.uri_from_tx_id(&image_tx_id);
-
-        let metadata = crate::profile::Metadata::new(name, description, &image_uri);
-
-        let metadata_json = serde_json::to_vec(&metadata)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize metadata: {}", e))?;
-        let metadata_tx_id = uploader
-            .upload(&metadata_json, Some("application/json"))
-            .await?;
-        let metadata_uri = uploader.uri_from_tx_id(&metadata_tx_id);
+        let metadata_uri = upload_metadata(
+            image_source,
+            |image_uri| crate::profile::Metadata::new(name, description, &image_uri),
+            uploader,
+        )
+        .await?;
 
         let asset_keypair = Keypair::new();
         let asset_pubkey = asset_keypair.pubkey();
 
         let effective_payer = payer.map(|p| p.pubkey()).unwrap_or_else(|| user.pubkey());
-        let create_ix = create_mpl_core_asset_ix(
-            &asset_pubkey,
-            user.pubkey(),
-            effective_payer,
-            name,
-            &metadata_uri,
-        )?;
+        let create_ix =
+            create_mpl_core_asset_ix(&asset_pubkey, user.pubkey(), effective_payer, name, &metadata_uri)?;
 
-        let signers: Vec<&dyn Signer> = vec![user as &dyn Signer];
-
-        if let Some(p) = payer {
-            WorldClient::new(&self.network).send_ixs_with_payer(
-                p,
-                &signers,
-                vec![create_ix],
-                RpcLayer::BaseLayer,
-            )?;
-        } else {
-            WorldClient::new(&self.network).send_ixs_with_payer(
-                user,
-                &signers,
-                vec![create_ix],
-                RpcLayer::BaseLayer,
-            )?;
-        }
+        let signers: Vec<&dyn Signer> = vec![user as &dyn Signer, &asset_keypair];
+        let payer_signer: &dyn Signer = payer.map(|p| p as &dyn Signer).unwrap_or(user as &dyn Signer);
+        send_with_signers(self.network, payer_signer, &signers, create_ix, RpcLayer::BaseLayer)?;
 
         Ok(ProfilePicture {
             asset: asset_pubkey,
@@ -213,4 +191,166 @@ impl World {
             metadata_uri,
         })
     }
+
+    pub async fn create_badge_collection(
+        &self,
+        collection: &Keypair,
+        update_authority: Option<&impl Signer>,
+        payer: Option<&impl Signer>,
+        image_source: ImageSource,
+        name: &str,
+        description: Option<&str>,
+        uploader: Option<ArweaveUploader>,
+    ) -> Result<BadgeCollection> {
+        let metadata_uri = upload_metadata(
+            image_source,
+            |image_uri| BadgeCollectionMetadata::new(name, description, &image_uri),
+            uploader,
+        )
+        .await?;
+
+        let collection_pubkey = collection.pubkey();
+
+        let authority_pubkey = update_authority
+            .map(|a| a.pubkey())
+            .unwrap_or(collection_pubkey);
+
+        let effective_payer = payer
+            .map(|p| p.pubkey())
+            .unwrap_or(authority_pubkey);
+        let create_ix = create_mpl_core_badge_collection_ix(
+            &collection_pubkey,
+            effective_payer,
+            authority_pubkey,
+            name,
+            &metadata_uri,
+        )?;
+
+        let signers: Vec<&dyn Signer> = vec![collection as &dyn Signer];
+        let payer_signer: &dyn Signer = payer
+            .map(|p| p as &dyn Signer)
+            .or_else(|| update_authority.map(|a| a as &dyn Signer))
+            .unwrap_or(collection as &dyn Signer);
+        send_with_signers(self.network, payer_signer, &signers, create_ix, RpcLayer::BaseLayer)?;
+
+        Ok(BadgeCollection {
+            collection: collection_pubkey,
+            update_authority: authority_pubkey,
+        })
+    }
+
+    pub async fn save_to_badge_collection(
+        &self,
+        authority: &impl Signer,
+        payer: Option<&impl Signer>,
+        collection: &Pubkey,
+        qualifying_action: QualifyingAction,
+        image_source: ImageSource,
+        name: &str,
+        description: Option<&str>,
+        uploader: Option<ArweaveUploader>,
+    ) -> Result<BadgeTemplate> {
+        let metadata_uri = upload_metadata(
+            image_source,
+            |image_uri| BadgeMetadata::new(name, description, &image_uri, qualifying_action.clone()),
+            uploader,
+        )
+        .await?;
+
+        let badge_keypair = Keypair::new();
+        let badge_pubkey = badge_keypair.pubkey();
+
+        let effective_payer = payer
+            .map(|p| p.pubkey())
+            .unwrap_or_else(|| authority.pubkey());
+        let create_ix = create_mpl_core_badge_ix(
+            &badge_pubkey,
+            *collection,
+            authority.pubkey(),
+            authority.pubkey(),
+            effective_payer,
+            name,
+            &metadata_uri,
+        )?;
+
+        let signers: Vec<&dyn Signer> = vec![authority as &dyn Signer, &badge_keypair];
+        let payer_signer: &dyn Signer =
+            payer.map(|p| p as &dyn Signer).unwrap_or(authority as &dyn Signer);
+        send_with_signers(self.network, payer_signer, &signers, create_ix, RpcLayer::BaseLayer)?;
+
+        Ok(BadgeTemplate {
+            asset: badge_pubkey,
+            collection: *collection,
+            name: name.to_string(),
+            uri: metadata_uri,
+            qualifying_action,
+        })
+    }
+
+    pub fn modify_badge(
+        &self,
+        authority: &impl Signer,
+        payer: Option<&impl Signer>,
+        badge: &Pubkey,
+        collection: Option<&Pubkey>,
+        new_name: Option<&str>,
+        new_uri: Option<&str>,
+    ) -> Result<Signature> {
+        let effective_payer = payer
+            .map(|p| p.pubkey())
+            .unwrap_or_else(|| authority.pubkey());
+
+        let update_ix = update_mpl_core_badge_ix(
+            badge,
+            collection.copied(),
+            effective_payer,
+            authority.pubkey(),
+            new_name,
+            new_uri,
+        );
+
+        let signers: Vec<&dyn Signer> = vec![authority as &dyn Signer];
+        let payer_signer: &dyn Signer =
+            payer.map(|p| p as &dyn Signer).unwrap_or(authority as &dyn Signer);
+        let tx = send_with_signers(self.network, payer_signer, &signers, update_ix, RpcLayer::BaseLayer)?;
+        Ok(tx)
+    }
+
+    pub fn claim_badge(
+        &self,
+        authority: &impl Signer,
+        payer: Option<&impl Signer>,
+        template: &BadgeTemplate,
+        new_owner: Pubkey,
+    ) -> Result<BadgeMint> {
+        let effective_payer = payer
+            .map(|p| p.pubkey())
+            .unwrap_or_else(|| authority.pubkey());
+
+        let badge_keypair = Keypair::new();
+        let badge_pubkey = badge_keypair.pubkey();
+
+        let create_ix = create_mpl_core_badge_ix(
+            &badge_pubkey,
+            template.collection,
+            authority.pubkey(),
+            new_owner,
+            effective_payer,
+            &template.name,
+            &template.uri,
+        )?;
+
+        let signers: Vec<&dyn Signer> = vec![authority as &dyn Signer, &badge_keypair];
+
+        let payer_signer: &dyn Signer =
+            payer.map(|p| p as &dyn Signer).unwrap_or(authority as &dyn Signer);
+        let tx = send_with_signers(self.network, payer_signer, &signers, create_ix, RpcLayer::BaseLayer)?;
+
+        Ok(BadgeMint {
+            signature: tx,
+            badge: badge_pubkey,
+            owner: new_owner,
+        })
+    }
+
 }

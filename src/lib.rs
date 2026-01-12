@@ -1,9 +1,11 @@
 pub mod client;
 pub mod constants;
+pub mod badges;
 pub mod error;
 pub mod instructions;
 pub mod m_macro;
 pub mod mojo_types;
 pub mod pda;
 pub mod profile;
+pub mod utils;
 pub mod world;

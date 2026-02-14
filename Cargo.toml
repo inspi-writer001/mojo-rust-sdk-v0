@@ -10,6 +10,8 @@ native = [
     "dep:solana-sdk",
     "dep:solana-rpc-client",
     "dep:solana-account",
+    "dep:solana-transaction",
+    "dep:solana-message",
 ]
 arweave = [
     "native",
@@ -26,8 +28,8 @@ solana-pubkey = "2.2.1"
 solana-keypair = "2.2.1"
 solana-signer = "2.2.1"
 solana-instruction = "2.2.1"
-solana-transaction = "2.2.1"
-solana-message = "2.2.1"
+solana-transaction = { version = "2.2.1", optional = true }
+solana-message = { version = "2.2.1", optional = true }
 solana-sdk-ids = "2.2.1"
 solana-system-interface = "1.0.0"
 solana-program = "2.2.1"

@@ -1,3 +1,4 @@
+#[cfg(feature = "native")]
 pub mod client;
 pub mod constants;
 pub mod error;
@@ -8,4 +9,5 @@ pub mod pda;
 #[path = "playable-characters/mod.rs"]
 pub mod playable_characters;
 pub mod profile;
+pub mod transaction;
 pub mod world;

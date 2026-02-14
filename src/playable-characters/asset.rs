@@ -1,12 +1,11 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use mpl_core::instructions::{CreateCollectionV2Builder, CreateV2Builder};
-use mpl_core::{Asset, Collection};
-use solana_client::rpc_client::RpcClient;
 use solana_instruction::Instruction;
+use solana_keypair::Keypair;
 use solana_pubkey::Pubkey;
+use solana_signer::Signer;
 
-use crate::error::WorldError;
-use crate::playable_characters::types::{CharacterData, CharacterMetadata, CollectionData};
+use crate::transaction::TransactionBundle;
 
 pub fn create_collection_ix(
     collection: &Pubkey,
@@ -70,7 +69,66 @@ pub fn mint_character_ix(
     Ok(ix)
 }
 
-pub fn fetch_character(rpc: &RpcClient, asset: &Pubkey) -> Result<Asset> {
+pub fn build_character_collection_tx(
+    payer: Pubkey,
+    name: &str,
+    metadata_uri: &str,
+) -> Result<TransactionBundle> {
+    let collection_keypair = Keypair::new();
+    let collection_pubkey = collection_keypair.pubkey();
+
+    let ix = create_collection_ix(&collection_pubkey, payer, name, metadata_uri)?;
+
+    Ok(TransactionBundle {
+        instructions: vec![ix],
+        signers: vec![collection_keypair],
+    })
+}
+
+pub fn build_character_tx(
+    collection: &Pubkey,
+    owner: Pubkey,
+    payer: Pubkey,
+    name: &str,
+    metadata_uri: &str,
+) -> Result<TransactionBundle> {
+    let asset_keypair = Keypair::new();
+    let asset_pubkey = asset_keypair.pubkey();
+
+    let ix = create_character_ix(&asset_pubkey, collection, owner, payer, name, metadata_uri)?;
+
+    Ok(TransactionBundle {
+        instructions: vec![ix],
+        signers: vec![asset_keypair],
+    })
+}
+
+pub fn build_select_character_tx(
+    collection: &Pubkey,
+    authority: Pubkey,
+    buyer: Pubkey,
+    payer: Pubkey,
+    name: &str,
+    uri: &str,
+) -> Result<TransactionBundle> {
+    let asset_keypair = Keypair::new();
+    let asset_pubkey = asset_keypair.pubkey();
+
+    let ix = mint_character_ix(&asset_pubkey, collection, authority, buyer, payer, name, uri)?;
+
+    Ok(TransactionBundle {
+        instructions: vec![ix],
+        signers: vec![asset_keypair],
+    })
+}
+
+#[cfg(feature = "native")]
+pub fn fetch_character(
+    rpc: &solana_client::rpc_client::RpcClient,
+    asset: &Pubkey,
+) -> Result<mpl_core::Asset> {
+    use crate::error::WorldError;
+
     let account_data = rpc
         .get_account_data(asset)
         .map_err(|e| WorldError::AccountNotFound(format!("Failed to fetch account: {}", e)))?;
@@ -81,12 +139,19 @@ pub fn fetch_character(rpc: &RpcClient, asset: &Pubkey) -> Result<Asset> {
         );
     }
 
-    let asset = Asset::from_bytes(&account_data)
+    let asset = mpl_core::Asset::from_bytes(&account_data)
         .map_err(|e| WorldError::AssetDeserializationError(format!("{}", e)))?;
     Ok(*asset)
 }
 
-pub fn fetch_collection(rpc: &RpcClient, collection: &Pubkey) -> Result<CollectionData> {
+#[cfg(feature = "native")]
+pub fn fetch_collection(
+    rpc: &solana_client::rpc_client::RpcClient,
+    collection: &Pubkey,
+) -> Result<crate::playable_characters::types::CollectionData> {
+    use crate::error::WorldError;
+    use mpl_core::Collection;
+
     let account_data = rpc.get_account_data(collection).map_err(|e| {
         WorldError::AccountNotFound(format!("Failed to fetch collection: {}", e))
     })?;
@@ -102,7 +167,7 @@ pub fn fetch_collection(rpc: &RpcClient, collection: &Pubkey) -> Result<Collecti
     let col = Collection::from_bytes(&account_data)
         .map_err(|e| WorldError::AssetDeserializationError(format!("{}", e)))?;
 
-    Ok(CollectionData {
+    Ok(crate::playable_characters::types::CollectionData {
         collection: *collection,
         update_authority: col.base.update_authority,
         name: col.base.name,
@@ -112,7 +177,11 @@ pub fn fetch_collection(rpc: &RpcClient, collection: &Pubkey) -> Result<Collecti
     })
 }
 
-pub async fn fetch_character_data(rpc: &RpcClient, asset_pubkey: &Pubkey) -> Result<CharacterData> {
+#[cfg(feature = "native")]
+pub async fn fetch_character_data(
+    rpc: &solana_client::rpc_client::RpcClient,
+    asset_pubkey: &Pubkey,
+) -> Result<crate::playable_characters::types::CharacterData> {
     let mpl_asset = fetch_character(rpc, asset_pubkey)?;
 
     let owner = mpl_asset.base.owner;
@@ -121,7 +190,7 @@ pub async fn fetch_character_data(rpc: &RpcClient, asset_pubkey: &Pubkey) -> Res
 
     let metadata = fetch_character_metadata_from_uri(&metadata_uri).await?;
 
-    Ok(CharacterData {
+    Ok(crate::playable_characters::types::CharacterData {
         asset: *asset_pubkey,
         collection,
         owner,
@@ -132,7 +201,11 @@ pub async fn fetch_character_data(rpc: &RpcClient, asset_pubkey: &Pubkey) -> Res
     })
 }
 
-pub async fn fetch_character_metadata_from_uri(metadata_uri: &str) -> Result<CharacterMetadata> {
+#[cfg(feature = "native")]
+pub async fn fetch_character_metadata_from_uri(metadata_uri: &str) -> Result<crate::playable_characters::types::CharacterMetadata> {
+    use anyhow::Context;
+    use crate::error::WorldError;
+
     let response = reqwest::get(metadata_uri).await.map_err(|e| {
         WorldError::MetadataFetchError(format!("Failed to download metadata: {}", e))
     })?;
@@ -143,7 +216,7 @@ pub async fn fetch_character_metadata_from_uri(metadata_uri: &str) -> Result<Cha
         );
     }
 
-    let metadata: CharacterMetadata = response
+    let metadata: crate::playable_characters::types::CharacterMetadata = response
         .json()
         .await
         .context("Failed to parse character metadata JSON")?;
@@ -151,18 +224,17 @@ pub async fn fetch_character_metadata_from_uri(metadata_uri: &str) -> Result<Cha
     Ok(metadata)
 }
 
+#[cfg(feature = "native")]
 pub fn fetch_characters_by_owner(
-    rpc: &RpcClient,
+    rpc: &solana_client::rpc_client::RpcClient,
     owner: &Pubkey,
-) -> Result<Vec<Asset>> {
+) -> Result<Vec<mpl_core::Asset>> {
+    use crate::error::WorldError;
     use solana_client::rpc_filter::{Memcmp, RpcFilterType};
 
     let mpl_core_id = mpl_core::ID;
 
-    // MPL Core asset account layout: byte 0 is Key discriminator (Uninitialized=0, AssetV1=1),
-    // then owner pubkey starts at offset 1
     let owner_filter = RpcFilterType::Memcmp(Memcmp::new_raw_bytes(1, owner.to_bytes().to_vec()));
-    // Filter for AssetV1 key discriminator
     let key_filter = RpcFilterType::Memcmp(Memcmp::new_raw_bytes(0, vec![1]));
 
     let config = solana_client::rpc_config::RpcProgramAccountsConfig {
@@ -177,7 +249,7 @@ pub fn fetch_characters_by_owner(
 
     let mut assets = Vec::new();
     for (_pubkey, account) in &accounts {
-        if let Ok(asset) = Asset::from_bytes(&account.data) {
+        if let Ok(asset) = mpl_core::Asset::from_bytes(&account.data) {
             assets.push(*asset);
         }
     }
@@ -185,20 +257,19 @@ pub fn fetch_characters_by_owner(
     Ok(assets)
 }
 
+#[cfg(feature = "native")]
 pub fn fetch_characters_by_collection(
-    rpc: &RpcClient,
+    rpc: &solana_client::rpc_client::RpcClient,
     collection: &Pubkey,
-) -> Result<Vec<(Pubkey, Asset)>> {
+) -> Result<Vec<(Pubkey, mpl_core::Asset)>> {
+    use crate::error::WorldError;
     use solana_client::rpc_filter::{Memcmp, RpcFilterType};
 
     let mpl_core_id = mpl_core::ID;
 
-    // For assets with a collection, the layout has the UpdateAuthority enum variant
-    // at offset 33 (after key byte + owner 32 bytes). The collection variant is 2,
-    // followed by the collection pubkey at offset 34.
-    let key_filter = RpcFilterType::Memcmp(Memcmp::new_raw_bytes(0, vec![1])); // AssetV1
+    let key_filter = RpcFilterType::Memcmp(Memcmp::new_raw_bytes(0, vec![1]));
     let collection_variant_filter =
-        RpcFilterType::Memcmp(Memcmp::new_raw_bytes(33, vec![2])); // UpdateAuthority::Collection
+        RpcFilterType::Memcmp(Memcmp::new_raw_bytes(33, vec![2]));
     let collection_filter = RpcFilterType::Memcmp(Memcmp::new_raw_bytes(
         34,
         collection.to_bytes().to_vec(),
@@ -216,7 +287,7 @@ pub fn fetch_characters_by_collection(
 
     let mut assets = Vec::new();
     for (pubkey, account) in &accounts {
-        if let Ok(asset) = Asset::from_bytes(&account.data) {
+        if let Ok(asset) = mpl_core::Asset::from_bytes(&account.data) {
             assets.push((*pubkey, *asset));
         }
     }

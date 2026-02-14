@@ -3,33 +3,55 @@ name = "mojo-rust-sdk"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["native", "arweave", "image-upload"]
+native = [
+    "dep:solana-client",
+    "dep:solana-sdk",
+    "dep:solana-rpc-client",
+    "dep:solana-account",
+]
+arweave = [
+    "native",
+    "image-upload",
+    "dep:arweave-rs",
+    "dep:tempfile",
+    "dep:dirs",
+]
+image-upload = ["dep:image", "tokio/fs"]
+
 [dependencies]
-solana-sdk = "2.2.1"
-solana-client = "2.2.1"
-solana-program = "2.2.1"
-thiserror = "1.0"
-solana-instruction = "2.2.1"
-solana-keypair = "2.2.1"
-solana-native-token = "2.2.1"
+# Always available (WASM-safe)
 solana-pubkey = "2.2.1"
+solana-keypair = "2.2.1"
 solana-signer = "2.2.1"
-solana-system-interface = "1.0.0"
+solana-instruction = "2.2.1"
 solana-transaction = "2.2.1"
 solana-message = "2.2.1"
 solana-sdk-ids = "2.2.1"
-solana-rpc-client = "2.2.1"
+solana-system-interface = "1.0.0"
+solana-program = "2.2.1"
+solana-native-token = "2.2.1"
 solana-address = "1.0.0"
-solana-account = "2.2.1"
+mpl-core = "0.11.1"
 anyhow = "1.0"
 sha2 = "0.10.9"
 bytemuck = { version = "1.15", features = ["derive"] }
-mpl-core = "0.11.1"
-reqwest = { version = "0.11", features = ["json"] }
-image = "0.24"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1", features = ["full"] }
-tempfile = "3.8"
-dirs = "5.0"
-arweave-rs = "0.2.0"
+thiserror = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
 url = "2.5"
+image = { version = "0.24", optional = true }
+tokio = { version = "1", features = ["rt", "macros"] }
+
+# Native-only (optional)
+solana-sdk = { version = "2.2.1", optional = true }
+solana-client = { version = "2.2.1", optional = true }
+solana-rpc-client = { version = "2.2.1", optional = true }
+solana-account = { version = "2.2.1", optional = true }
+
+# Arweave upload (optional, implies native)
+arweave-rs = { version = "0.2.0", optional = true }
+tempfile = { version = "3.8", optional = true }
+dirs = { version = "5.0", optional = true }

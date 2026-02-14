@@ -1,42 +1,64 @@
-use anyhow::{ensure, Result};
-use bytemuck::{bytes_of, from_bytes, Pod, Zeroable};
-use solana_client::rpc_client::RpcClient;
-use solana_keypair::Keypair;
+use anyhow::Result;
 use solana_pubkey::Pubkey;
-use solana_sdk::signature::Signature;
-use solana_signer::Signer;
 
-use crate::{
-    client::{
-        RpcLayer, RpcType, WorldClient, BASE_LAYER_RPC_DEVNET, BASE_LAYER_RPC_MAINNET,
-        ER_LAYER_RPC_DEVNET, ER_LAYER_RPC_MAINNET,
-    },
-    instructions::{create_world_ix, delegate_account_ix, write_to_world_ix},
-    pda::{find_world_pda, world_seed_hash},
-    playable_characters::{
-        create_character_ix, create_collection_ix, fetch_character_data,
-        fetch_characters_by_collection, fetch_characters_by_owner, fetch_collection,
-        mint_character_ix, Character, CharacterCollection, CharacterData, CharacterMetadata,
-        CollectionData,
-    },
-    profile::{
-        create_mpl_core_asset_ix, fetch_metadata_from_uri, fetch_mpl_core_asset, load_image_data,
-        validate_image, ArweaveUploader, ImageSource, ProfilePicture, ProfilePictureData,
-    },
+use crate::transaction::TransactionBundle;
+
+// Re-export build functions as associated functions on World
+use crate::profile::asset::build_profile_picture_tx;
+use crate::playable_characters::asset::{
+    build_character_collection_tx, build_character_tx, build_select_character_tx,
 };
 
+#[cfg(feature = "native")]
+use anyhow::ensure;
+#[cfg(feature = "native")]
+use bytemuck::{bytes_of, from_bytes, Pod, Zeroable};
+#[cfg(feature = "native")]
+use solana_keypair::Keypair;
+#[cfg(feature = "native")]
+use solana_sdk::signature::Signature;
+#[cfg(feature = "native")]
+use solana_signer::Signer;
+
+#[cfg(feature = "native")]
+use crate::client::{
+    RpcLayer, RpcType, WorldClient, BASE_LAYER_RPC_DEVNET, BASE_LAYER_RPC_MAINNET,
+    ER_LAYER_RPC_DEVNET, ER_LAYER_RPC_MAINNET,
+};
+#[cfg(feature = "native")]
+use crate::instructions::{create_world_ix, delegate_account_ix, write_to_world_ix};
+#[cfg(feature = "native")]
+use crate::pda::{find_world_pda, world_seed_hash};
+
+#[cfg(feature = "native")]
+use crate::playable_characters::{
+    fetch_character_data, fetch_characters_by_collection, fetch_characters_by_owner,
+    fetch_collection, mint_character_ix, Character, CharacterData, CollectionData,
+};
+
+#[cfg(feature = "native")]
+use crate::profile::{
+    fetch_metadata_from_uri, fetch_mpl_core_asset, ProfilePictureData,
+};
+
+#[cfg(feature = "arweave")]
+use crate::playable_characters::{
+    create_character_ix, create_collection_ix, CharacterCollection, CharacterMetadata,
+};
+
+#[cfg(feature = "arweave")]
+use crate::profile::{
+    create_mpl_core_asset_ix, load_image_data, validate_image,
+    ArweaveUploader, ImageSource, ProfilePicture,
+};
+
+#[cfg(feature = "native")]
 pub trait MojoState: Pod + Zeroable + Copy {}
 
+#[cfg(feature = "native")]
 impl<T> MojoState for T where T: Pod + Zeroable + Copy {}
 
-// #[repr(C)]
-// #[derive(Pod, Zeroable, Clone, Copy, Debug, PartialEq)]
-// pub struct World {
-//     pub creator: [u8; 32],
-//     pub seed: [u8; 32],
-//     pub world_address: [u8; 32],
-// }
-
+#[cfg(feature = "native")]
 #[repr(C)]
 #[derive(Pod, Zeroable, Clone, Copy, Debug, PartialEq)]
 pub struct WorldData {
@@ -45,11 +67,60 @@ pub struct WorldData {
     pub world_address: [u8; 32],
 }
 
+#[cfg(feature = "native")]
 pub struct World {
     pub data: WorldData,
     pub network: RpcType,
 }
 
+#[cfg(not(feature = "native"))]
+pub struct World;
+
+impl World {
+    // ── Layer 1: Instruction builders (always available, WASM-safe) ──
+
+    pub fn build_profile_picture_tx(
+        owner: Pubkey,
+        payer: Pubkey,
+        name: &str,
+        metadata_uri: &str,
+    ) -> Result<TransactionBundle> {
+        build_profile_picture_tx(owner, payer, name, metadata_uri)
+    }
+
+    pub fn build_character_collection_tx(
+        payer: Pubkey,
+        name: &str,
+        metadata_uri: &str,
+    ) -> Result<TransactionBundle> {
+        build_character_collection_tx(payer, name, metadata_uri)
+    }
+
+    pub fn build_character_tx(
+        collection: &Pubkey,
+        owner: Pubkey,
+        payer: Pubkey,
+        name: &str,
+        metadata_uri: &str,
+    ) -> Result<TransactionBundle> {
+        build_character_tx(collection, owner, payer, name, metadata_uri)
+    }
+
+    pub fn build_select_character_tx(
+        collection: &Pubkey,
+        authority: Pubkey,
+        buyer: Pubkey,
+        payer: Pubkey,
+        name: &str,
+        uri: &str,
+    ) -> Result<TransactionBundle> {
+        build_select_character_tx(collection, authority, buyer, payer, name, uri)
+    }
+}
+
+// ── Layer 2: RPC + Signing (native only) ──
+
+#[cfg(feature = "native")]
 impl World {
     pub fn create_world(network: RpcType, payer: &impl Signer, name: &str) -> Result<Self> {
         let (world_pda, _) = find_world_pda(&payer.pubkey(), name);
@@ -116,9 +187,8 @@ impl World {
         let (world_pda, _) = find_world_pda(owner, name);
 
         let rpc = match self.network {
-            RpcType::Devnet => RpcClient::new(ER_LAYER_RPC_DEVNET),
-
-            RpcType::Mainnet => RpcClient::new(ER_LAYER_RPC_MAINNET),
+            RpcType::Devnet => solana_client::rpc_client::RpcClient::new(ER_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => solana_client::rpc_client::RpcClient::new(ER_LAYER_RPC_MAINNET),
         };
         let data = rpc.get_account_data(&world_pda)?;
         let required_len = core::mem::size_of::<T>();
@@ -133,6 +203,167 @@ impl World {
         Ok(state)
     }
 
+    pub fn select_character(
+        &self,
+        authority: &impl Signer,
+        buyer: &Pubkey,
+        payer: Option<&impl Signer>,
+        collection: &Pubkey,
+        character_name: &str,
+        character_uri: &str,
+    ) -> Result<Character> {
+        let asset_keypair = Keypair::new();
+        let asset_pubkey = asset_keypair.pubkey();
+
+        let effective_payer = payer
+            .map(|p| p.pubkey())
+            .unwrap_or_else(|| authority.pubkey());
+        let ix = mint_character_ix(
+            &asset_pubkey,
+            collection,
+            authority.pubkey(),
+            *buyer,
+            effective_payer,
+            character_name,
+            character_uri,
+        )?;
+
+        let signers: Vec<&dyn Signer> =
+            vec![authority as &dyn Signer, &asset_keypair as &dyn Signer];
+
+        if let Some(p) = payer {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                p,
+                &signers,
+                vec![ix],
+                RpcLayer::BaseLayer,
+            )?;
+        } else {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                authority,
+                &signers,
+                vec![ix],
+                RpcLayer::BaseLayer,
+            )?;
+        }
+
+        Ok(Character {
+            asset: asset_pubkey,
+            collection: *collection,
+            owner: *buyer,
+        })
+    }
+
+    pub async fn get_profile_picture(&self, asset: &Pubkey) -> Result<ProfilePictureData> {
+        let rpc = match self.network {
+            RpcType::Devnet => solana_client::rpc_client::RpcClient::new(BASE_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => solana_client::rpc_client::RpcClient::new(BASE_LAYER_RPC_MAINNET),
+        };
+
+        let mpl_asset = fetch_mpl_core_asset(&rpc, asset)?;
+
+        let owner = mpl_asset.base.owner;
+        let collection = None;
+        let metadata_uri = mpl_asset.base.uri;
+
+        let metadata = fetch_metadata_from_uri(&metadata_uri).await?;
+
+        Ok(ProfilePictureData {
+            asset: *asset,
+            collection,
+            owner,
+            name: metadata.name,
+            description: metadata.description,
+            image_uri: metadata.image,
+            metadata_uri,
+        })
+    }
+
+    pub async fn fetch_character(&self, asset: &Pubkey) -> Result<CharacterData> {
+        let rpc = match self.network {
+            RpcType::Devnet => solana_client::rpc_client::RpcClient::new(BASE_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => solana_client::rpc_client::RpcClient::new(BASE_LAYER_RPC_MAINNET),
+        };
+
+        fetch_character_data(&rpc, asset).await
+    }
+
+    pub async fn fetch_characters_by_owner(
+        &self,
+        owner: &Pubkey,
+    ) -> Result<Vec<CharacterData>> {
+        let rpc = match self.network {
+            RpcType::Devnet => solana_client::rpc_client::RpcClient::new(BASE_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => solana_client::rpc_client::RpcClient::new(BASE_LAYER_RPC_MAINNET),
+        };
+
+        let assets = fetch_characters_by_owner(&rpc, owner)?;
+        let mut characters = Vec::new();
+        for asset in &assets {
+            let metadata_uri = &asset.base.uri;
+            if let Ok(metadata) =
+                crate::playable_characters::fetch_character_metadata_from_uri(metadata_uri).await
+            {
+                characters.push(CharacterData {
+                    asset: Pubkey::default(),
+                    collection: None,
+                    owner: asset.base.owner,
+                    name: metadata.name,
+                    description: metadata.description,
+                    image_uri: metadata.image,
+                    metadata_uri: metadata_uri.clone(),
+                });
+            }
+        }
+
+        Ok(characters)
+    }
+
+    pub async fn fetch_characters_by_collection(
+        &self,
+        collection: &Pubkey,
+    ) -> Result<Vec<CharacterData>> {
+        let rpc = match self.network {
+            RpcType::Devnet => solana_client::rpc_client::RpcClient::new(BASE_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => solana_client::rpc_client::RpcClient::new(BASE_LAYER_RPC_MAINNET),
+        };
+
+        let assets = fetch_characters_by_collection(&rpc, collection)?;
+        let mut characters = Vec::new();
+        for (pubkey, asset) in &assets {
+            let metadata_uri = &asset.base.uri;
+            if let Ok(metadata) =
+                crate::playable_characters::fetch_character_metadata_from_uri(metadata_uri).await
+            {
+                characters.push(CharacterData {
+                    asset: *pubkey,
+                    collection: Some(*collection),
+                    owner: asset.base.owner,
+                    name: metadata.name,
+                    description: metadata.description,
+                    image_uri: metadata.image,
+                    metadata_uri: metadata_uri.clone(),
+                });
+            }
+        }
+
+        Ok(characters)
+    }
+
+    pub fn fetch_collection_data(&self, collection: &Pubkey) -> Result<CollectionData> {
+        let rpc = match self.network {
+            RpcType::Devnet => solana_client::rpc_client::RpcClient::new(BASE_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => solana_client::rpc_client::RpcClient::new(BASE_LAYER_RPC_MAINNET),
+        };
+
+        fetch_collection(&rpc, collection)
+    }
+}
+
+// ── Layer 3: Upload Pipeline (arweave only) ──
+
+#[cfg(feature = "arweave")]
+impl World {
     pub async fn create_profile_picture(
         &self,
         user: &impl Signer,
@@ -192,31 +423,6 @@ impl World {
             asset: asset_pubkey,
             collection: None,
             owner: user.pubkey(),
-        })
-    }
-
-    pub async fn get_profile_picture(&self, asset: &Pubkey) -> Result<ProfilePictureData> {
-        let rpc = match self.network {
-            RpcType::Devnet => RpcClient::new(BASE_LAYER_RPC_DEVNET),
-            RpcType::Mainnet => RpcClient::new(BASE_LAYER_RPC_MAINNET),
-        };
-
-        let mpl_asset = fetch_mpl_core_asset(&rpc, asset)?;
-
-        let owner = mpl_asset.base.owner;
-        let collection = None;
-        let metadata_uri = mpl_asset.base.uri;
-
-        let metadata = fetch_metadata_from_uri(&metadata_uri).await?;
-
-        Ok(ProfilePictureData {
-            asset: *asset,
-            collection,
-            owner,
-            name: metadata.name,
-            description: metadata.description,
-            image_uri: metadata.image,
-            metadata_uri,
         })
     }
 
@@ -339,136 +545,5 @@ impl World {
             collection: *collection,
             owner: user.pubkey(),
         })
-    }
-
-    pub fn select_character(
-        &self,
-        authority: &impl Signer,
-        buyer: &Pubkey,
-        payer: Option<&impl Signer>,
-        collection: &Pubkey,
-        character_name: &str,
-        character_uri: &str,
-    ) -> Result<Character> {
-        let asset_keypair = Keypair::new();
-        let asset_pubkey = asset_keypair.pubkey();
-
-        let effective_payer = payer
-            .map(|p| p.pubkey())
-            .unwrap_or_else(|| authority.pubkey());
-        let ix = mint_character_ix(
-            &asset_pubkey,
-            collection,
-            authority.pubkey(),
-            *buyer,
-            effective_payer,
-            character_name,
-            character_uri,
-        )?;
-
-        let signers: Vec<&dyn Signer> =
-            vec![authority as &dyn Signer, &asset_keypair as &dyn Signer];
-
-        if let Some(p) = payer {
-            WorldClient::new(&self.network).send_ixs_with_payer(
-                p,
-                &signers,
-                vec![ix],
-                RpcLayer::BaseLayer,
-            )?;
-        } else {
-            WorldClient::new(&self.network).send_ixs_with_payer(
-                authority,
-                &signers,
-                vec![ix],
-                RpcLayer::BaseLayer,
-            )?;
-        }
-
-        Ok(Character {
-            asset: asset_pubkey,
-            collection: *collection,
-            owner: *buyer,
-        })
-    }
-
-    pub async fn fetch_character(&self, asset: &Pubkey) -> Result<CharacterData> {
-        let rpc = match self.network {
-            RpcType::Devnet => RpcClient::new(BASE_LAYER_RPC_DEVNET),
-            RpcType::Mainnet => RpcClient::new(BASE_LAYER_RPC_MAINNET),
-        };
-
-        fetch_character_data(&rpc, asset).await
-    }
-
-    pub async fn fetch_characters_by_owner(
-        &self,
-        owner: &Pubkey,
-    ) -> Result<Vec<CharacterData>> {
-        let rpc = match self.network {
-            RpcType::Devnet => RpcClient::new(BASE_LAYER_RPC_DEVNET),
-            RpcType::Mainnet => RpcClient::new(BASE_LAYER_RPC_MAINNET),
-        };
-
-        let assets = fetch_characters_by_owner(&rpc, owner)?;
-        let mut characters = Vec::new();
-        for asset in &assets {
-            let metadata_uri = &asset.base.uri;
-            if let Ok(metadata) =
-                crate::playable_characters::fetch_character_metadata_from_uri(metadata_uri).await
-            {
-                characters.push(CharacterData {
-                    asset: Pubkey::default(),
-                    collection: None,
-                    owner: asset.base.owner,
-                    name: metadata.name,
-                    description: metadata.description,
-                    image_uri: metadata.image,
-                    metadata_uri: metadata_uri.clone(),
-                });
-            }
-        }
-
-        Ok(characters)
-    }
-
-    pub async fn fetch_characters_by_collection(
-        &self,
-        collection: &Pubkey,
-    ) -> Result<Vec<CharacterData>> {
-        let rpc = match self.network {
-            RpcType::Devnet => RpcClient::new(BASE_LAYER_RPC_DEVNET),
-            RpcType::Mainnet => RpcClient::new(BASE_LAYER_RPC_MAINNET),
-        };
-
-        let assets = fetch_characters_by_collection(&rpc, collection)?;
-        let mut characters = Vec::new();
-        for (pubkey, asset) in &assets {
-            let metadata_uri = &asset.base.uri;
-            if let Ok(metadata) =
-                crate::playable_characters::fetch_character_metadata_from_uri(metadata_uri).await
-            {
-                characters.push(CharacterData {
-                    asset: *pubkey,
-                    collection: Some(*collection),
-                    owner: asset.base.owner,
-                    name: metadata.name,
-                    description: metadata.description,
-                    image_uri: metadata.image,
-                    metadata_uri: metadata_uri.clone(),
-                });
-            }
-        }
-
-        Ok(characters)
-    }
-
-    pub fn fetch_collection_data(&self, collection: &Pubkey) -> Result<CollectionData> {
-        let rpc = match self.network {
-            RpcType::Devnet => RpcClient::new(BASE_LAYER_RPC_DEVNET),
-            RpcType::Mainnet => RpcClient::new(BASE_LAYER_RPC_MAINNET),
-        };
-
-        fetch_collection(&rpc, collection)
     }
 }

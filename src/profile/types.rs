@@ -1,14 +1,15 @@
 use solana_pubkey::Pubkey;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum ImageSource {
-    LocalFile(PathBuf),
+    #[cfg(feature = "native")]
+    LocalFile(std::path::PathBuf),
     Url(String),
 }
 
 impl ImageSource {
-    pub fn from_path(path: impl Into<PathBuf>) -> Self {
+    #[cfg(feature = "native")]
+    pub fn from_path(path: impl Into<std::path::PathBuf>) -> Self {
         Self::LocalFile(path.into())
     }
 

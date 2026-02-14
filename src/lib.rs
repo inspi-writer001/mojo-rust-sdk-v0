@@ -5,5 +5,7 @@ pub mod instructions;
 pub mod m_macro;
 pub mod mojo_types;
 pub mod pda;
+#[path = "playable-characters/mod.rs"]
+pub mod playable_characters;
 pub mod profile;
 pub mod world;

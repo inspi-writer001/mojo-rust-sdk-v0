@@ -13,6 +13,12 @@ use crate::{
     },
     instructions::{create_world_ix, delegate_account_ix, write_to_world_ix},
     pda::{find_world_pda, world_seed_hash},
+    playable_characters::{
+        create_character_ix, create_collection_ix, fetch_character_data,
+        fetch_characters_by_collection, fetch_characters_by_owner, fetch_collection,
+        mint_character_ix, Character, CharacterCollection, CharacterData, CharacterMetadata,
+        CollectionData,
+    },
     profile::{
         create_mpl_core_asset_ix, fetch_metadata_from_uri, fetch_mpl_core_asset, load_image_data,
         validate_image, ArweaveUploader, ImageSource, ProfilePicture, ProfilePictureData,
@@ -212,5 +218,257 @@ impl World {
             image_uri: metadata.image,
             metadata_uri,
         })
+    }
+
+    pub async fn create_character_collection(
+        &self,
+        user: &impl Signer,
+        payer: Option<&impl Signer>,
+        image_source: ImageSource,
+        name: &str,
+        description: Option<&str>,
+        uploader: Option<ArweaveUploader>,
+    ) -> Result<CharacterCollection> {
+        let image_data = load_image_data(&image_source).await?;
+        validate_image(&image_data)?;
+
+        let uploader = uploader.unwrap_or_default();
+        let image_tx_id = uploader.upload(&image_data, Some("image/png")).await?;
+        let image_uri = uploader.uri_from_tx_id(&image_tx_id);
+
+        let metadata = CharacterMetadata::new(name, description, &image_uri);
+
+        let metadata_json = serde_json::to_vec(&metadata)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize metadata: {}", e))?;
+        let metadata_tx_id = uploader
+            .upload(&metadata_json, Some("application/json"))
+            .await?;
+        let metadata_uri = uploader.uri_from_tx_id(&metadata_tx_id);
+
+        let collection_keypair = Keypair::new();
+        let collection_pubkey = collection_keypair.pubkey();
+
+        let effective_payer = payer.map(|p| p.pubkey()).unwrap_or_else(|| user.pubkey());
+        let ix = create_collection_ix(&collection_pubkey, effective_payer, name, &metadata_uri)?;
+
+        let signers: Vec<&dyn Signer> =
+            vec![user as &dyn Signer, &collection_keypair as &dyn Signer];
+
+        if let Some(p) = payer {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                p,
+                &signers,
+                vec![ix],
+                RpcLayer::BaseLayer,
+            )?;
+        } else {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                user,
+                &signers,
+                vec![ix],
+                RpcLayer::BaseLayer,
+            )?;
+        }
+
+        Ok(CharacterCollection {
+            collection: collection_pubkey,
+            owner: user.pubkey(),
+        })
+    }
+
+    pub async fn create_character(
+        &self,
+        user: &impl Signer,
+        payer: Option<&impl Signer>,
+        collection: &Pubkey,
+        image_source: ImageSource,
+        name: &str,
+        description: Option<&str>,
+        uploader: Option<ArweaveUploader>,
+    ) -> Result<Character> {
+        let image_data = load_image_data(&image_source).await?;
+        validate_image(&image_data)?;
+
+        let uploader = uploader.unwrap_or_default();
+        let image_tx_id = uploader.upload(&image_data, Some("image/png")).await?;
+        let image_uri = uploader.uri_from_tx_id(&image_tx_id);
+
+        let metadata = CharacterMetadata::new(name, description, &image_uri);
+
+        let metadata_json = serde_json::to_vec(&metadata)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize metadata: {}", e))?;
+        let metadata_tx_id = uploader
+            .upload(&metadata_json, Some("application/json"))
+            .await?;
+        let metadata_uri = uploader.uri_from_tx_id(&metadata_tx_id);
+
+        let asset_keypair = Keypair::new();
+        let asset_pubkey = asset_keypair.pubkey();
+
+        let effective_payer = payer.map(|p| p.pubkey()).unwrap_or_else(|| user.pubkey());
+        let ix = create_character_ix(
+            &asset_pubkey,
+            collection,
+            user.pubkey(),
+            effective_payer,
+            name,
+            &metadata_uri,
+        )?;
+
+        let signers: Vec<&dyn Signer> =
+            vec![user as &dyn Signer, &asset_keypair as &dyn Signer];
+
+        if let Some(p) = payer {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                p,
+                &signers,
+                vec![ix],
+                RpcLayer::BaseLayer,
+            )?;
+        } else {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                user,
+                &signers,
+                vec![ix],
+                RpcLayer::BaseLayer,
+            )?;
+        }
+
+        Ok(Character {
+            asset: asset_pubkey,
+            collection: *collection,
+            owner: user.pubkey(),
+        })
+    }
+
+    pub fn select_character(
+        &self,
+        authority: &impl Signer,
+        buyer: &Pubkey,
+        payer: Option<&impl Signer>,
+        collection: &Pubkey,
+        character_name: &str,
+        character_uri: &str,
+    ) -> Result<Character> {
+        let asset_keypair = Keypair::new();
+        let asset_pubkey = asset_keypair.pubkey();
+
+        let effective_payer = payer
+            .map(|p| p.pubkey())
+            .unwrap_or_else(|| authority.pubkey());
+        let ix = mint_character_ix(
+            &asset_pubkey,
+            collection,
+            authority.pubkey(),
+            *buyer,
+            effective_payer,
+            character_name,
+            character_uri,
+        )?;
+
+        let signers: Vec<&dyn Signer> =
+            vec![authority as &dyn Signer, &asset_keypair as &dyn Signer];
+
+        if let Some(p) = payer {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                p,
+                &signers,
+                vec![ix],
+                RpcLayer::BaseLayer,
+            )?;
+        } else {
+            WorldClient::new(&self.network).send_ixs_with_payer(
+                authority,
+                &signers,
+                vec![ix],
+                RpcLayer::BaseLayer,
+            )?;
+        }
+
+        Ok(Character {
+            asset: asset_pubkey,
+            collection: *collection,
+            owner: *buyer,
+        })
+    }
+
+    pub async fn fetch_character(&self, asset: &Pubkey) -> Result<CharacterData> {
+        let rpc = match self.network {
+            RpcType::Devnet => RpcClient::new(BASE_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => RpcClient::new(BASE_LAYER_RPC_MAINNET),
+        };
+
+        fetch_character_data(&rpc, asset).await
+    }
+
+    pub async fn fetch_characters_by_owner(
+        &self,
+        owner: &Pubkey,
+    ) -> Result<Vec<CharacterData>> {
+        let rpc = match self.network {
+            RpcType::Devnet => RpcClient::new(BASE_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => RpcClient::new(BASE_LAYER_RPC_MAINNET),
+        };
+
+        let assets = fetch_characters_by_owner(&rpc, owner)?;
+        let mut characters = Vec::new();
+        for asset in &assets {
+            let metadata_uri = &asset.base.uri;
+            if let Ok(metadata) =
+                crate::playable_characters::fetch_character_metadata_from_uri(metadata_uri).await
+            {
+                characters.push(CharacterData {
+                    asset: Pubkey::default(),
+                    collection: None,
+                    owner: asset.base.owner,
+                    name: metadata.name,
+                    description: metadata.description,
+                    image_uri: metadata.image,
+                    metadata_uri: metadata_uri.clone(),
+                });
+            }
+        }
+
+        Ok(characters)
+    }
+
+    pub async fn fetch_characters_by_collection(
+        &self,
+        collection: &Pubkey,
+    ) -> Result<Vec<CharacterData>> {
+        let rpc = match self.network {
+            RpcType::Devnet => RpcClient::new(BASE_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => RpcClient::new(BASE_LAYER_RPC_MAINNET),
+        };
+
+        let assets = fetch_characters_by_collection(&rpc, collection)?;
+        let mut characters = Vec::new();
+        for (pubkey, asset) in &assets {
+            let metadata_uri = &asset.base.uri;
+            if let Ok(metadata) =
+                crate::playable_characters::fetch_character_metadata_from_uri(metadata_uri).await
+            {
+                characters.push(CharacterData {
+                    asset: *pubkey,
+                    collection: Some(*collection),
+                    owner: asset.base.owner,
+                    name: metadata.name,
+                    description: metadata.description,
+                    image_uri: metadata.image,
+                    metadata_uri: metadata_uri.clone(),
+                });
+            }
+        }
+
+        Ok(characters)
+    }
+
+    pub fn fetch_collection_data(&self, collection: &Pubkey) -> Result<CollectionData> {
+        let rpc = match self.network {
+            RpcType::Devnet => RpcClient::new(BASE_LAYER_RPC_DEVNET),
+            RpcType::Mainnet => RpcClient::new(BASE_LAYER_RPC_MAINNET),
+        };
+
+        fetch_collection(&rpc, collection)
     }
 }

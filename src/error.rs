@@ -28,4 +28,8 @@ pub enum WorldError {
     MetadataFetchError(String),
     #[error("Failed to deserialize asset: {0}")]
     AssetDeserializationError(String),
+    #[error("Collection error: {0}")]
+    CollectionError(String),
+    #[error("Character not found: {0}")]
+    CharacterNotFound(String),
 }

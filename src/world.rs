@@ -9,6 +9,10 @@ use crate::playable_characters::asset::{
     build_character_collection_tx, build_character_tx, build_select_character_tx,
 };
 
+// Instruction builders and PDA helpers are WASM-safe (no RPC, no signing)
+use crate::instructions::{create_world_ix, delegate_account_ix, write_to_world_ix};
+use crate::pda::{find_world_pda, world_seed_hash};
+
 #[cfg(feature = "native")]
 use anyhow::ensure;
 #[cfg(feature = "native")]
@@ -25,10 +29,6 @@ use crate::client::{
     RpcLayer, RpcType, WorldClient, BASE_LAYER_RPC_DEVNET, BASE_LAYER_RPC_MAINNET,
     ER_LAYER_RPC_DEVNET, ER_LAYER_RPC_MAINNET,
 };
-#[cfg(feature = "native")]
-use crate::instructions::{create_world_ix, delegate_account_ix, write_to_world_ix};
-#[cfg(feature = "native")]
-use crate::pda::{find_world_pda, world_seed_hash};
 
 #[cfg(feature = "native")]
 use crate::playable_characters::{
@@ -115,6 +115,42 @@ impl World {
         uri: &str,
     ) -> Result<TransactionBundle> {
         build_select_character_tx(collection, authority, buyer, payer, name, uri)
+    }
+
+    /// Build a transaction to create on-chain state (create + delegate).
+    /// Signers vec is empty — the browser wallet (Phantom) signs as payer.
+    pub fn build_create_state_tx(
+        owner: Pubkey,
+        name: &str,
+        state_data: &[u8],
+    ) -> Result<TransactionBundle> {
+        let (state_pda, _) = find_world_pda(&owner, name);
+        let seed_hash = world_seed_hash(&owner, name);
+
+        let create_ix = create_world_ix(owner, state_pda, seed_hash, state_data);
+        let delegate_ix = delegate_account_ix(owner, state_pda, seed_hash, state_data);
+
+        Ok(TransactionBundle {
+            instructions: vec![create_ix, delegate_ix],
+            signers: vec![],
+        })
+    }
+
+    /// Build a transaction to write/update on-chain state.
+    pub fn build_write_state_tx(
+        owner: Pubkey,
+        name: &str,
+        state_data: &[u8],
+    ) -> Result<TransactionBundle> {
+        let (world_pda, _) = find_world_pda(&owner, name);
+        let seed_hash = world_seed_hash(&owner, name);
+
+        let ix = write_to_world_ix(owner, world_pda, seed_hash, state_data);
+
+        Ok(TransactionBundle {
+            instructions: vec![ix],
+            signers: vec![],
+        })
     }
 }
 

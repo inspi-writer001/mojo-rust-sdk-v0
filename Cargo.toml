@@ -2,6 +2,17 @@
 name = "mojo-rust-sdk"
 version = "0.1.0"
 edition = "2021"
+description = "A high-performance Solana gaming SDK designed to totally abstract the complexities of managing state in onchain games/applications powered by Magicblock, Metaplex, Pinocchio"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/inspi-writer001/mojo-rust-sdk-v0"
+readme = "README.md"
+keywords = ["solana", "gaming", "metaplex", "magicblock", "leptos", "pinocchio"]
+categories = [
+    "blockchain-utilities",
+    "game-development",
+    "wasm",
+    "cryptography",
+]
 
 [features]
 default = ["native", "arweave", "image-upload"]

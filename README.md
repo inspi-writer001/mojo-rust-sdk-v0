@@ -1,19 +1,21 @@
 # Mojo Rust SDK
 
-A Rust SDK for building on-chain games and applications with the Mojo World system on Solana. The SDK provides world and state management, NFT profile pictures, and playable character collections powered by [Metaplex MPL Core](https://developers.metaplex.com/core) and [Arweave](https://www.arweave.org/) for decentralized storage.
+A Rust SDK for building on-chain games and applications on Solana. It wraps the [accel-Mojo program](https://github.com/Turbin3/accel-Mojo) to handle world/state management, and integrates [Metaplex MPL Core](https://developers.metaplex.com/core) for NFT profile pictures and playable character collections, with [Arweave](https://www.arweave.org/) for decentralized image and metadata storage.
 
-## Features
+## On-Chain Program
 
-- **World Management** -- Create worlds, initialize delegated state accounts, and read/write state on-chain with support for both base layer (Solana) and ephemeral rollup (MagicBlock) execution
-- **Profile Pictures** -- Mint NFT profile pictures as MPL Core assets with images and metadata stored on Arweave
-- **Playable Characters** -- Create character collections, define character templates, and mint characters for players using MPL Core collections
-- **State Macros** -- `mojo!` and `mojo_enum!` macros for defining on-chain state structs that are `Pod`/`Zeroable` compatible
-- **Network Support** -- Built-in RPC configuration for both Devnet and Mainnet
-- **Frontend Compatible** -- Three-layer architecture with Cargo feature gates lets frontends (wallet adapters, Bevy, WASM) use instruction builders without pulling in native dependencies
+All world and state operations talk to the **accel-Mojo** program:
+
+- **Repository:** https://github.com/Turbin3/accel-Mojo
+- **Program ID:** `7iMdvW8A4Tw3yxjbXjpx4b8LTW13EQLB4eTmPyqRvxzM`
+
+The program manages the lifecycle of world accounts and their delegated state — creation, delegation to the [MagicBlock](https://magicblock.gg) ephemeral rollup for fast writes, and committing state back to the Solana base layer.
+
+NFT operations (profile pictures, character collections, character minting) go directly through Metaplex MPL Core; the accel-Mojo program is not involved for those.
+
+---
 
 ## Installation
-
-Add the SDK to your project:
 
 ```toml
 [dependencies]
@@ -22,95 +24,75 @@ mojo-rust-sdk = { git = "https://github.com/inspi-writer001/mojo-rust-sdk-v0" }
 
 ### Feature Flags
 
-The SDK uses Cargo features to control which layers are compiled:
+The SDK is split into three layers controlled by Cargo features:
 
-| Feature | Default | Description |
-| ------- | ------- | ----------- |
-| `native` | Yes | RPC client, transaction signing, account fetching (`WorldClient`, `World` convenience methods) |
-| `arweave` | Yes | Arweave upload pipeline (implies `native` and `image-upload`) |
-| `image-upload` | Yes | Image validation via the `image` crate and `tokio::fs` loading |
+| Feature | Default | What it adds |
+|---------|---------|--------------|
+| `native` | yes | `WorldClient`, all `World` RPC methods, account fetching. Pulls in `solana-client`, `solana-sdk`, `solana-transaction`, `solana-message`. |
+| `arweave` | yes | `ArweaveUploader`, full end-to-end create methods. Implies `native` + `image-upload`. Pulls in `arweave-rs`, `tempfile`, `dirs`. |
+| `image-upload` | yes | Image validation (`image` crate) and `tokio::fs` file loading. |
 
-**With all defaults** you get the full SDK -- upload, build, sign, and send in one call.
+The core layer — types, instruction builders, `TransactionBundle`, the `mojo!` macros — is always compiled regardless of features, and is safe to use in WASM and Bevy frontends.
 
-**For frontends / WASM**, disable defaults to get only the core layer (types, instruction builders, `TransactionBundle`):
-
+**Full SDK (default):**
 ```toml
-[dependencies]
-mojo-rust-sdk = { git = "https://github.com/inspi-writer001/mojo-rust-sdk-v0", default-features = false }
+mojo-rust-sdk = { git = "..." }
 ```
 
-**Native without Arweave** (bring your own upload pipeline):
-
+**Frontend / WASM (instruction builders only, no RPC):**
 ```toml
-[dependencies]
-mojo-rust-sdk = { git = "https://github.com/inspi-writer001/mojo-rust-sdk-v0", default-features = false, features = ["native"] }
+mojo-rust-sdk = { git = "...", default-features = false }
 ```
 
-### Prerequisites
+**Native RPC without Arweave (bring your own upload):**
+```toml
+mojo-rust-sdk = { git = "...", default-features = false, features = ["native"] }
+```
 
-- Rust 2021 edition
-- A funded Solana keypair (for `native` features)
-- An [Arweave wallet](https://www.arweave.org/) (for `arweave` feature)
+---
 
-#### Arweave Wallet Setup
+## How It Works
 
-The SDK looks for an Arweave wallet in the following order:
+### Worlds and State
 
-1. Explicit path passed to `ArweaveUploader::new(Some("path/to/wallet.json"), None)`
-2. `ARWEAVE_WALLET` environment variable
-3. `~/.arweave/wallet.json`
+A **World** is a PDA account owned by the accel-Mojo program. It stores arbitrary state as raw bytes using `bytemuck`. The SDK seeds the PDA deterministically from the owner pubkey and a name string.
+
+State accounts go through two steps on the base layer:
+1. **Create** — allocates the account with initial data.
+2. **Delegate** — transfers execution authority to the MagicBlock ephemeral rollup so state can be written with low latency without waiting for full block confirmation.
+
+Writes go to the ephemeral rollup; reads come from the ephemeral layer too. NFT operations always go through the Solana base layer.
+
+The delegation program ID is `DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh`.
+
+### NFTs
+
+**Profile pictures** are standalone MPL Core assets (`CreateV1Builder`).
+
+**Character collections** use MPL Core collection accounts (`CreateCollectionV2Builder`). **Characters** are MPL Core assets linked to a collection (`CreateV2Builder`), which lets you query all assets in a collection on-chain without an indexer.
+
+Metadata (name, description, image URL) is serialized to JSON and stored on Arweave. The Arweave transaction ID becomes the metadata URI written into the asset.
+
+### TransactionBundle
+
+The instruction builders return a `TransactionBundle`:
+
+```rust
+pub struct TransactionBundle {
+    pub instructions: Vec<Instruction>,
+    pub signers: Vec<Keypair>,   // ephemeral keypairs the SDK generated (asset, collection)
+}
+```
+
+The `signers` are keypairs that the SDK generated internally (e.g. the new asset or collection account). In a backend context you sign with all of them. In a frontend context you partial-sign with the ephemeral signers and hand the transaction to the wallet adapter for the user's signature.
+
+---
 
 ## Quick Start
 
-### Frontend / WASM Usage (no default features)
+### Defining State Types
 
-When using `default-features = false`, the SDK exposes pure instruction builders that return a `TransactionBundle` containing instructions and ephemeral signers. Pass these to a wallet adapter for signing.
-
-```rust
-use mojo_rust_sdk::transaction::TransactionBundle;
-use mojo_rust_sdk::world::World;
-use mojo_rust_sdk::playable_characters::{CharacterData, CharacterMetadata};
-
-// Build instructions -- no RPC, no signing, no async
-let bundle = World::build_character_collection_tx(
-    payer_pubkey,
-    "Warriors",
-    "https://arweave.net/metadata-uri",
-)?;
-
-// bundle.instructions -- pass to your wallet adapter
-// bundle.signers     -- partial-sign with these ephemeral keypairs
-// The wallet signs the rest (user's signature)
-```
-
-Available `build_*_tx()` methods on `World`:
-
-| Method | Description |
-| ------ | ----------- |
-| `build_profile_picture_tx(owner, payer, name, metadata_uri)` | Build a profile picture mint instruction |
-| `build_character_collection_tx(payer, name, metadata_uri)` | Build a character collection creation instruction |
-| `build_character_tx(collection, owner, payer, name, metadata_uri)` | Build a character asset creation instruction |
-| `build_select_character_tx(collection, authority, buyer, payer, name, uri)` | Build a character mint instruction |
-
-These are also available as standalone functions in `mojo_rust_sdk::profile::build_profile_picture_tx` and `mojo_rust_sdk::playable_characters::{build_character_collection_tx, build_character_tx, build_select_character_tx}`.
-
-### Creating a World
-
-*Requires `native` feature.*
-
-```rust
-use mojo_rust_sdk::client::RpcType;
-use mojo_rust_sdk::world::World;
-use solana_keypair::Keypair;
-use solana_signer::Signer;
-
-let payer = Keypair::new();
-let world = World::create_world(RpcType::Devnet, &payer, "my-game")?;
-```
-
-### Defining On-Chain State
-
-Use the `mojo!` macro to define state structs that can be stored on-chain. These structs are automatically `Pod`, `Zeroable`, `Clone`, and `Copy`.
+Use the `mojo!` macro to define structs that can be stored on-chain. It derives `Pod`, `Zeroable`, `Clone`, `Copy` and gives you `LEN`, `to_bytes()`, and `len()`:
 
 ```rust
 use mojo_rust_sdk::mojo;
@@ -123,108 +105,106 @@ mojo! {
         pub score: u64,
     }
 }
+
+// PlayerState::LEN == 32
+// player.to_bytes() -> &[u8]
 ```
 
-You can also define enum-like constants with `mojo_enum!`:
+For enum-like constants that live inside a `mojo!` struct, use `mojo_enum!`. It creates a `#[repr(transparent)]` newtype wrapping a backing integer — `Pod` compatible, zero-cost:
 
 ```rust
 use mojo_rust_sdk::mojo_enum;
 
 mojo_enum! { pub enum Direction: u8 {
-    Up = 0,
-    Down = 1,
-    Left = 2,
+    Up    = 0,
+    Down  = 1,
+    Left  = 2,
     Right = 3,
 }}
+
+// Direction::Up, Direction::Down, etc. are associated constants.
+// Use inside a mojo! struct:
+mojo! {
+    pub struct PlayerState {
+        pub x:         u64,
+        pub y:         u64,
+        pub facing:    Direction,
+        _pad:          [u8; 7],
+    }
+}
 ```
 
-### Creating and Managing State
+> **Note:** All fields in a `mojo!` struct must be `Pod`. Non-primitive types (like `Direction`) must also be `Pod` (which `mojo_enum!` guarantees). Structs must be properly padded to avoid alignment issues — add explicit `_pad: [u8; N]` fields as needed.
 
-*Requires `native` feature.*
+---
+
+### Backend Usage (default features)
+
+The backend path holds keypairs directly and handles sign + send in one call.
+
+#### Create a World
 
 ```rust
-// Create a delegated state account
-let initial = PlayerState {
-    x: 0,
-    y: 0,
-    health: 100,
-    score: 0,
-};
+use mojo_rust_sdk::client::RpcType;
+use mojo_rust_sdk::world::World;
+use solana_keypair::Keypair;
+
+let payer = Keypair::new();
+let world = World::create_world(RpcType::Devnet, &payer, "my-game")?;
+```
+
+#### Create and Delegate a State Account
+
+```rust
+let initial = PlayerState { x: 0, y: 0, health: 100, score: 0 };
 let state_pda = world.create_state(&payer, "player-state", &initial)?;
+```
 
-// Write state (goes through the ephemeral rollup layer)
-let updated = PlayerState {
-    x: 10,
-    y: 20,
-    health: 95,
-    score: 50,
-};
+#### Write State (via ephemeral rollup)
+
+```rust
+let updated = PlayerState { x: 10, y: 20, health: 95, score: 50 };
 let signature = world.write_state(&payer, "player-state", &updated)?;
+```
 
-// Read state
+#### Read State (from ephemeral layer)
+
+```rust
 let current: PlayerState = world.read_state(&payer.pubkey(), "player-state")?;
 ```
 
-### Creating a Profile Picture
-
-*Requires `arweave` feature (default).*
+#### Profile Picture (full pipeline — requires `arweave` feature)
 
 ```rust
-use mojo_rust_sdk::profile::{ImageSource, ArweaveUploader};
-
-let image = ImageSource::from_path("avatar.png");
-// or from a URL:
-// let image = ImageSource::from_url("https://example.com/avatar.png");
+use mojo_rust_sdk::profile::ImageSource;
 
 let profile = world.create_profile_picture(
     &user_keypair,
-    None,                // payer (None = user pays)
-    image,
+    None,                                   // payer — None means user pays
+    ImageSource::from_path("avatar.png"),   // or ImageSource::from_url("https://...")
     "My Avatar",
     Some("A cool avatar"),
-    None,                // ArweaveUploader (None = default config)
+    None,                                   // ArweaveUploader — None uses default config
 ).await?;
 
-println!("Profile picture asset: {}", profile.asset);
+println!("asset: {}", profile.asset);
+println!("owner: {}", profile.owner);
 ```
 
-#### Fetching a Profile Picture
-
-*Requires `native` feature.*
-
-```rust
-let data = world.get_profile_picture(&profile.asset).await?;
-
-println!("Name: {}", data.name);
-println!("Image: {}", data.image_uri);
-```
-
-### Playable Characters
-
-#### 1. Create a Character Collection
-
-*Requires `arweave` feature (default).*
-
-A collection groups related characters together as an MPL Core collection.
+#### Create a Character Collection (requires `arweave` feature)
 
 ```rust
 let collection = world.create_character_collection(
     &creator_keypair,
-    None,                              // payer
-    ImageSource::from_path("collection-banner.png"),
+    None,
+    ImageSource::from_path("banner.png"),
     "Warriors",
     Some("A collection of warrior characters"),
-    None,                              // ArweaveUploader
+    None,
 ).await?;
-
-println!("Collection: {}", collection.collection);
 ```
 
-#### 2. Create a Character Template
-
-*Requires `arweave` feature (default).*
-
-Create a character asset inside a collection. This is the "master" character definition.
+#### Add a Character to a Collection (requires `arweave` feature)
 
 ```rust
 let character = world.create_character(
@@ -236,169 +216,190 @@ let character = world.create_character(
     Some("A warrior wielding flames"),
     None,
 ).await?;
-
-println!("Character asset: {}", character.asset);
 ```
 
-#### 3. Mint a Character for a Player
+#### Mint a Character for a Player (requires `native` feature)
 
-*Requires `native` feature.*
-
-The collection authority mints a new character for a buyer/player.
+The collection authority signs; a new ephemeral keypair is created for the asset account internally.
 
 ```rust
 let minted = world.select_character(
-    &authority_keypair,     // collection creator must sign
-    &player_pubkey,         // new owner
+    &authority_keypair,
+    &player_pubkey,
     None,                   // payer
     &collection.collection,
     "Fire Knight",
-    "https://arweave.net/metadata-uri",
+    "https://arweave.net/<metadata-tx-id>",
 )?;
-
-println!("Minted character {} for {}", minted.asset, minted.owner);
 ```
 
-#### 4. Fetch Characters
-
-*Requires `native` feature.*
+#### Fetch Characters (requires `native` feature)
 
 ```rust
-// Single character by asset address
-let character_data = world.fetch_character(&asset_pubkey).await?;
+// By asset pubkey
+let data = world.fetch_character(&asset_pubkey).await?;
 
 // All characters owned by a wallet
 let owned = world.fetch_characters_by_owner(&player_pubkey).await?;
 
-// All characters in a collection
-let in_collection = world.fetch_characters_by_collection(&collection_pubkey).await?;
+// All characters in a collection (on-chain filter, no indexer needed)
+let in_col = world.fetch_characters_by_collection(&collection.collection).await?;
 
 // Collection metadata
-let col_data = world.fetch_collection_data(&collection_pubkey)?;
-println!("Collection '{}' has {} minted", col_data.name, col_data.num_minted);
+let col_data = world.fetch_collection_data(&collection.collection)?;
+println!("{} — {} minted", col_data.name, col_data.num_minted);
+
+// Profile picture
+let pic = world.get_profile_picture(&profile.asset).await?;
+println!("{} — {}", pic.name, pic.image_uri);
 ```
 
-## Architecture
+---
 
-The SDK is split into three layers, each gated behind Cargo features:
+### Frontend / WASM Usage (no default features)
 
+With `default-features = false`, the entire RPC, signing, and filesystem stack is dropped. You get pure instruction builders that return `TransactionBundle`. No `async`, no network calls, no keypair storage.
+
+```rust
+use mojo_rust_sdk::world::World;
+use mojo_rust_sdk::transaction::TransactionBundle;
+
+// Build a character collection creation transaction
+let bundle = World::build_character_collection_tx(
+    payer_pubkey,
+    "Warriors",
+    "https://arweave.net/<metadata-tx-id>",
+)?;
+
+// Partial-sign with the SDK-generated ephemeral keypairs
+// (these are the new account keypairs — asset, collection, etc.)
+for signer in &bundle.signers {
+    tx.partial_sign(&[signer], recent_blockhash);
+}
+
+// Hand `tx` to the wallet adapter for the user's signature, then submit.
 ```
-Layer 1 -- Core (always available, WASM-safe)
-  Types, instruction builders, TransactionBundle
-  No RPC, no signing, no filesystem access
 
-Layer 2 -- Native (feature = "native")
-  WorldClient, World convenience methods, account fetching
-  Requires solana-client, solana-sdk
+All six `build_*_tx` methods are available with no features:
 
-Layer 3 -- Arweave (feature = "arweave", implies native + image-upload)
-  ArweaveUploader, full end-to-end create methods
-  Requires arweave-rs, tempfile, dirs
+```rust
+// Profile picture
+let bundle = World::build_profile_picture_tx(owner, payer, "Avatar", metadata_uri)?;
+
+// Character collection
+let bundle = World::build_character_collection_tx(payer, "Warriors", metadata_uri)?;
+
+// Character inside a collection
+let bundle = World::build_character_tx(&collection_pubkey, owner, payer, "Knight", metadata_uri)?;
+
+// Mint a character for a player (no ephemeral signers — wallet is the only signer)
+let bundle = World::build_select_character_tx(
+    &collection_pubkey, authority, buyer, payer, "Knight", metadata_uri,
+)?;
+
+// Create + delegate a state account (no ephemeral signers)
+let bundle = World::build_create_state_tx(owner, "player-state", &initial_state_bytes)?;
+
+// Write state via ephemeral rollup (no ephemeral signers)
+let bundle = World::build_write_state_tx(owner, "player-state", &updated_state_bytes)?;
 ```
+
+> `build_create_state_tx` and `build_select_character_tx` return `signers: vec![]` — only the wallet needs to sign.
+
+---
+
+## Arweave Wallet
+
+The `ArweaveUploader` (requires `arweave` feature) looks for a wallet in this order:
+
+1. Path passed to `ArweaveUploader::new(Some("path/to/wallet.json"), None)`
+2. `ARWEAVE_WALLET` environment variable
+3. `~/.arweave/wallet.json`
+
+```rust
+use mojo_rust_sdk::profile::ArweaveUploader;
+
+// Explicit path
+let uploader = ArweaveUploader::new(Some("/path/to/wallet.json".into()), None);
+
+// Custom gateway
+let uploader = ArweaveUploader::new(None, Some("https://arweave.net".into()));
+
+// Default (env var or ~/.arweave/wallet.json, default gateway)
+let uploader = ArweaveUploader::default();
+```
+
+---
+
+## RPC Endpoints
+
+`WorldClient` selects the endpoint based on `RpcType` and the layer being targeted:
+
+| Network | Layer | Endpoint |
+|---------|-------|----------|
+| Devnet | Base Layer | `https://api.devnet.solana.com` |
+| Devnet | Ephemeral | `https://devnet-eu.magicblock.app` |
+| Mainnet | Base Layer | `https://api.mainnet-beta.solana.com` |
+| Mainnet | Ephemeral | `https://mainnet-beta-eu.magicblock.app` |
+
+World/state creates and NFT operations go to the Base Layer. State writes go to the Ephemeral layer.
+
+---
+
+## Source Layout
 
 ```
 src/
-├── lib.rs              # Module exports (client gated behind native)
-├── transaction.rs      # TransactionBundle (always available)
-├── world.rs            # World struct -- primary API surface (3 impl blocks by layer)
-├── client.rs           # RPC client (native only)
-├── constants.rs        # Program ID
-├── error.rs            # Error types (variants gated per feature)
-├── instructions.rs     # Solana instruction builders (create, delegate, write)
-├── pda.rs              # PDA derivation helpers
-├── mojo_types.rs       # Instruction handler types
-├── m_macro.rs          # mojo! and mojo_enum! macros
+├── lib.rs                      module declarations
+├── transaction.rs              TransactionBundle (always compiled)
+├── constants.rs                accel-Mojo program ID
+├── error.rs                    WorldError enum
+├── instructions.rs             raw Solana instruction builders (create_world, delegate, write)
+├── pda.rs                      PDA derivation (SHA-256 seed hash + find_program_address)
+├── mojo_types.rs               GenIxHandler, MojoInstructions — instruction encoding helpers
+├── m_macro.rs                  mojo! and mojo_enum! macros
+├── client.rs                   WorldClient, RpcType, RpcLayer  [native]
+├── world.rs                    World struct — primary API surface
+│                               ├── Layer 1 impl  (always, 6 build_*_tx methods)
+│                               ├── Layer 2 impl  [native]
+│                               └── Layer 3 impl  [arweave]
 ├── profile/
-│   ├── asset.rs        # MPL Core asset creation & fetching, build_profile_picture_tx
-│   ├── image.rs        # Image loading & validation (image-upload feature)
-│   ├── types.rs        # ProfilePicture, Metadata, ImageSource
-│   └── uploader.rs     # Arweave upload client (arweave feature)
+│   ├── types.rs                ProfilePicture, ProfilePictureData, Metadata, ImageSource
+│   ├── asset.rs                create_mpl_core_asset_ix, build_profile_picture_tx,
+│   │                           fetch_mpl_core_asset, fetch_metadata_from_uri  [native]
+│   ├── image.rs                load_image_data  [native], validate_image  [image-upload]
+│   └── uploader.rs             ArweaveUploader  [arweave]
 └── playable-characters/
-    ├── asset.rs        # Collection & character builders, build_*_tx, queries
-    └── types.rs        # Character, CharacterCollection, CollectionData
+    ├── types.rs                Character, CharacterCollection, CharacterData,
+    │                           CollectionData, CharacterMetadata
+    └── asset.rs                create_collection_ix, create_character_ix, mint_character_ix,
+                                build_character_collection_tx, build_character_tx,
+                                build_select_character_tx,
+                                fetch_character, fetch_collection, fetch_character_data,
+                                fetch_character_metadata_from_uri,
+                                fetch_characters_by_owner, fetch_characters_by_collection  [native]
 ```
 
-### Key Concepts
-
-**World** -- The central struct through which all SDK operations are performed. With `native`, wraps a `WorldData` account (creator, seed, address) and a network type. Without `native`, exposes only static `build_*_tx()` methods.
-
-**TransactionBundle** -- Returned by all `build_*_tx()` methods. Contains `instructions: Vec<Instruction>` and `signers: Vec<Keypair>` (ephemeral keypairs generated for assets/collections). Frontends partial-sign with the ephemeral signers, then pass to a wallet adapter for the user's signature.
-
-**State Delegation** -- State accounts are created on the Solana base layer and then delegated to the MagicBlock ephemeral rollup for fast writes. Reads go through the ephemeral layer; NFT operations go through the base layer.
-
-**MPL Core** -- Profile pictures are standalone MPL Core assets (`CreateV1Builder`). Playable characters use MPL Core collections (`CreateCollectionV2Builder`) and collection-linked assets (`CreateV2Builder`).
-
-**Arweave** -- Images and JSON metadata are uploaded to Arweave for permanent decentralized storage. The SDK handles the full pipeline: load image, validate format/size, upload image, build metadata JSON, upload metadata, then pass the metadata URI to the on-chain instruction.
-
-### RPC Endpoints
-
-| Network | Layer      | Endpoint                                 |
-| ------- | ---------- | ---------------------------------------- |
-| Devnet  | Base Layer | `https://api.devnet.solana.com`          |
-| Devnet  | Ephemeral  | `https://devnet-eu.magicblock.app`       |
-| Mainnet | Base Layer | `https://api.mainnet-beta.solana.com`    |
-| Mainnet | Ephemeral  | `https://mainnet-beta-eu.magicblock.app` |
-
-### Image Support
-
-- Formats: PNG, JPG, GIF, WebP
-- Max size: 10 MB
-- Sources: local file path (`native` feature) or URL
-
-## API Reference
-
-### `World` -- Layer 1 (always available)
-
-| Method | Description |
-| ------ | ----------- |
-| `build_profile_picture_tx(owner, payer, name, metadata_uri)` | Build profile picture mint instructions |
-| `build_character_collection_tx(payer, name, metadata_uri)` | Build collection creation instructions |
-| `build_character_tx(collection, owner, payer, name, metadata_uri)` | Build character creation instructions |
-| `build_select_character_tx(collection, authority, buyer, payer, name, uri)` | Build character mint instructions |
-
-### `World` -- Layer 2 (`native` feature)
-
-| Method                                       | Description                              |
-| -------------------------------------------- | ---------------------------------------- |
-| `create_world(network, payer, name)`         | Create a new world account on-chain      |
-| `create_state(payer, name, initial_state)`   | Create and delegate a state account      |
-| `write_state(payer, name, new_state)`        | Write state via the ephemeral rollup     |
-| `read_state(owner, name)`                    | Read state from the ephemeral layer      |
-| `select_character(...)`                      | Mint a character for a player            |
-| `get_profile_picture(asset)`                 | Fetch profile picture data and metadata  |
-| `fetch_character(asset)`                     | Fetch a single character's data          |
-| `fetch_characters_by_owner(owner)`           | Query all characters owned by a wallet   |
-| `fetch_characters_by_collection(collection)` | Query all characters in a collection     |
-| `fetch_collection_data(collection)`          | Fetch collection metadata                |
-
-### `World` -- Layer 3 (`arweave` feature)
-
-| Method | Description |
-| ------ | ----------- |
-| `create_profile_picture(...)` | Upload image/metadata to Arweave, mint NFT profile picture |
-| `create_character_collection(...)` | Upload image/metadata, create MPL Core collection |
-| `create_character(...)` | Upload image/metadata, create character asset in collection |
-
-### Payer Pattern
-
-Most creation methods accept an optional `payer` parameter. When `None`, the user/authority keypair pays for the transaction. When `Some`, a separate keypair covers fees -- useful for gasless experiences where a backend pays on behalf of users.
+---
 
 ## Development
 
 ```bash
-# Build (all features)
+# Full build (all features)
 cargo build
 
-# Build core only (WASM-safe)
+# Core only — no RPC, no Arweave, no image crate (WASM-safe)
 cargo build --no-default-features
 
-# Build native without arweave
+# Native RPC layer without Arweave
 cargo build --no-default-features --features native
 
-# Run tests
+# Tests
 cargo test
 ```
 
+---
+
 ## License
 
-See [LICENSE](LICENSE) for details.
+MIT OR Apache-2.0 — see [LICENSE](LICENSE).

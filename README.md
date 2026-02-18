@@ -26,25 +26,28 @@ mojo-rust-sdk = { git = "https://github.com/inspi-writer001/mojo-rust-sdk-v0" }
 
 The SDK is split into three layers controlled by Cargo features:
 
-| Feature | Default | What it adds |
-|---------|---------|--------------|
-| `native` | yes | `WorldClient`, all `World` RPC methods, account fetching. Pulls in `solana-client`, `solana-sdk`, `solana-transaction`, `solana-message`. |
-| `arweave` | yes | `ArweaveUploader`, full end-to-end create methods. Implies `native` + `image-upload`. Pulls in `arweave-rs`, `tempfile`, `dirs`. |
-| `image-upload` | yes | Image validation (`image` crate) and `tokio::fs` file loading. |
+| Feature        | Default | What it adds                                                                                                                              |
+| -------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `native`       | yes     | `WorldClient`, all `World` RPC methods, account fetching. Pulls in `solana-client`, `solana-sdk`, `solana-transaction`, `solana-message`. |
+| `arweave`      | yes     | `ArweaveUploader`, full end-to-end create methods. Implies `native` + `image-upload`. Pulls in `arweave-rs`, `tempfile`, `dirs`.          |
+| `image-upload` | yes     | Image validation (`image` crate) and `tokio::fs` file loading.                                                                            |
 
 The core layer — types, instruction builders, `TransactionBundle`, the `mojo!` macros — is always compiled regardless of features, and is safe to use in WASM and Bevy frontends.
 
 **Full SDK (default):**
+
 ```toml
 mojo-rust-sdk = { git = "..." }
 ```
 
 **Frontend / WASM (instruction builders only, no RPC):**
+
 ```toml
 mojo-rust-sdk = { git = "...", default-features = false }
 ```
 
 **Native RPC without Arweave (bring your own upload):**
+
 ```toml
 mojo-rust-sdk = { git = "...", default-features = false, features = ["native"] }
 ```
@@ -58,6 +61,7 @@ mojo-rust-sdk = { git = "...", default-features = false, features = ["native"] }
 A **World** is a PDA account owned by the accel-Mojo program. It stores arbitrary state as raw bytes using `bytemuck`. The SDK seeds the PDA deterministically from the owner pubkey and a name string.
 
 State accounts go through two steps on the base layer:
+
 1. **Create** — allocates the account with initial data.
 2. **Delegate** — transfers execution authority to the MagicBlock ephemeral rollup so state can be written with low latency without waiting for full block confirmation.
 
@@ -260,51 +264,197 @@ println!("{} — {}", pic.name, pic.image_uri);
 
 With `default-features = false`, the entire RPC, signing, and filesystem stack is dropped. You get pure instruction builders that return `TransactionBundle`. No `async`, no network calls, no keypair storage.
 
+All six `build_*_tx` methods are static — they live on `World` and need no instance. The workflow is always the same:
+
+1. Call `World::build_*_tx(...)` → get a `TransactionBundle`
+2. Build a `Transaction` from `bundle.instructions`
+3. Partial-sign with each keypair in `bundle.signers` (ephemeral accounts the SDK generated)
+4. Hand the partially-signed transaction to the wallet adapter for the user's signature
+5. Submit
+
+`bundle.signers` is empty for operations where the wallet is the only required signer (world state, select-character). For asset and collection creation it contains the new account keypair.
+
+---
+
+#### Character Collection (frontend)
+
+You must have already uploaded metadata to Arweave (or another host) and have the URI ready.
+
 ```rust
 use mojo_rust_sdk::world::World;
-use mojo_rust_sdk::transaction::TransactionBundle;
+use solana_transaction::Transaction;
+use solana_signer::Signer;
 
-// Build a character collection creation transaction
+let metadata_uri = "https://arweave.net/<your-metadata-tx-id>";
+
 let bundle = World::build_character_collection_tx(
-    payer_pubkey,
+    wallet.pubkey(),  // payer — the connected wallet pays
     "Warriors",
-    "https://arweave.net/<metadata-tx-id>",
+    metadata_uri,
 )?;
 
-// Partial-sign with the SDK-generated ephemeral keypairs
-// (these are the new account keypairs — asset, collection, etc.)
+// bundle.signers[0] is the newly-generated collection account keypair.
+// Build and partial-sign before the wallet signs.
+let mut tx = Transaction::new_with_payer(&bundle.instructions, Some(&wallet.pubkey()));
 for signer in &bundle.signers {
     tx.partial_sign(&[signer], recent_blockhash);
 }
 
-// Hand `tx` to the wallet adapter for the user's signature, then submit.
+// tx is now partially signed. Pass to wallet adapter to get the user signature.
+// let signed_tx = wallet.sign_transaction(tx).await?;
+// rpc.send_and_confirm_transaction(&signed_tx)?;
 ```
 
-All six `build_*_tx` methods are available with no features:
+---
+
+#### Character Minting (frontend)
+
+Minting a character to a player requires the collection authority's signature. In a frontend context, the authority is typically the wallet. The asset account keypair (`bundle.signers[0]`) is generated by the SDK and must be partial-signed before the wallet signs.
 
 ```rust
-// Profile picture
-let bundle = World::build_profile_picture_tx(owner, payer, "Avatar", metadata_uri)?;
+use mojo_rust_sdk::world::World;
+use solana_transaction::Transaction;
+use solana_pubkey::Pubkey;
 
-// Character collection
-let bundle = World::build_character_collection_tx(payer, "Warriors", metadata_uri)?;
+let collection: Pubkey = /* your collection pubkey */;
+let buyer: Pubkey = /* player's wallet pubkey */;
+let metadata_uri = "https://arweave.net/<character-metadata-tx-id>";
 
-// Character inside a collection
-let bundle = World::build_character_tx(&collection_pubkey, owner, payer, "Knight", metadata_uri)?;
-
-// Mint a character for a player (no ephemeral signers — wallet is the only signer)
 let bundle = World::build_select_character_tx(
-    &collection_pubkey, authority, buyer, payer, "Knight", metadata_uri,
+    &collection,
+    wallet.pubkey(),  // authority — must be the collection's update authority
+    buyer,
+    wallet.pubkey(),  // payer
+    "Fire Knight",
+    metadata_uri,
 )?;
 
-// Create + delegate a state account (no ephemeral signers)
-let bundle = World::build_create_state_tx(owner, "player-state", &initial_state_bytes)?;
+// For select_character the new asset keypair IS in bundle.signers.
+// The wallet signs as both payer and authority.
+let mut tx = Transaction::new_with_payer(&bundle.instructions, Some(&wallet.pubkey()));
+for signer in &bundle.signers {
+    tx.partial_sign(&[signer], recent_blockhash);
+}
 
-// Write state via ephemeral rollup (no ephemeral signers)
-let bundle = World::build_write_state_tx(owner, "player-state", &updated_state_bytes)?;
+// Hand to wallet: signs as authority + payer, then submit.
+// let signed_tx = wallet.sign_transaction(tx).await?;
 ```
 
-> `build_create_state_tx` and `build_select_character_tx` return `signers: vec![]` — only the wallet needs to sign.
+---
+
+#### World State — Create and Delegate (frontend)
+
+`build_create_state_tx` emits two instructions: one to allocate the account, one to delegate it to the MagicBlock ephemeral rollup. No ephemeral signers — the wallet is the only signer.
+
+```rust
+use mojo_rust_sdk::{mojo, world::World};
+use solana_transaction::Transaction;
+use bytemuck::bytes_of;
+
+mojo! {
+    pub struct PlayerState {
+        pub x:      u64,
+        pub y:      u64,
+        pub health: u64,
+        pub score:  u64,
+    }
+}
+
+let initial = PlayerState { x: 0, y: 0, health: 100, score: 0 };
+
+let bundle = World::build_create_state_tx(
+    wallet.pubkey(),
+    "player-state",
+    bytes_of(&initial),       // &[u8] — bytemuck zero-copy cast
+)?;
+
+// bundle.signers is empty — the wallet is the only required signer.
+assert!(bundle.signers.is_empty());
+
+let mut tx = Transaction::new_with_payer(&bundle.instructions, Some(&wallet.pubkey()));
+// No partial signing needed. Hand directly to wallet.
+// let signed_tx = wallet.sign_transaction(tx).await?;
+```
+
+---
+
+#### World State — Write (frontend)
+
+State writes go to the ephemeral rollup. No new accounts are created, so `bundle.signers` is empty again.
+
+```rust
+use mojo_rust_sdk::{mojo, world::World};
+use solana_transaction::Transaction;
+use bytemuck::bytes_of;
+
+// Same PlayerState type as above — reuse across create/write.
+let updated = PlayerState { x: 10, y: 20, health: 95, score: 150 };
+
+let bundle = World::build_write_state_tx(
+    wallet.pubkey(),
+    "player-state",
+    bytes_of(&updated),
+)?;
+
+let mut tx = Transaction::new_with_payer(&bundle.instructions, Some(&wallet.pubkey()));
+// Sign with wallet and send to the ephemeral RPC endpoint.
+// let signed_tx = wallet.sign_transaction(tx).await?;
+```
+
+---
+
+#### Profile Picture (frontend)
+
+```rust
+use mojo_rust_sdk::world::World;
+use solana_transaction::Transaction;
+
+// Upload your image + metadata JSON to Arweave (or IPFS) yourself first.
+let metadata_uri = "https://arweave.net/<profile-metadata-tx-id>";
+
+let bundle = World::build_profile_picture_tx(
+    wallet.pubkey(),  // owner
+    wallet.pubkey(),  // payer
+    "My Avatar",
+    metadata_uri,
+)?;
+
+// bundle.signers[0] is the new asset account keypair.
+let mut tx = Transaction::new_with_payer(&bundle.instructions, Some(&wallet.pubkey()));
+for signer in &bundle.signers {
+    tx.partial_sign(&[signer], recent_blockhash);
+}
+// let signed_tx = wallet.sign_transaction(tx).await?;
+```
+
+---
+
+#### Character Asset (frontend)
+
+Creates a character inside an existing collection. The SDK generates a fresh asset keypair.
+
+```rust
+use mojo_rust_sdk::world::World;
+use solana_transaction::Transaction;
+
+let collection: Pubkey = /* collection pubkey */;
+let metadata_uri = "https://arweave.net/<character-metadata-tx-id>";
+
+let bundle = World::build_character_tx(
+    &collection,
+    wallet.pubkey(),  // owner (also the authority of this asset)
+    wallet.pubkey(),  // payer
+    "Fire Knight",
+    metadata_uri,
+)?;
+
+// bundle.signers[0] is the new asset account keypair.
+let mut tx = Transaction::new_with_payer(&bundle.instructions, Some(&wallet.pubkey()));
+for signer in &bundle.signers {
+    tx.partial_sign(&[signer], recent_blockhash);
+}
+// let signed_tx = wallet.sign_transaction(tx).await?;
+```
 
 ---
 
@@ -335,12 +485,12 @@ let uploader = ArweaveUploader::default();
 
 `WorldClient` selects the endpoint based on `RpcType` and the layer being targeted:
 
-| Network | Layer | Endpoint |
-|---------|-------|----------|
-| Devnet | Base Layer | `https://api.devnet.solana.com` |
-| Devnet | Ephemeral | `https://devnet-eu.magicblock.app` |
-| Mainnet | Base Layer | `https://api.mainnet-beta.solana.com` |
-| Mainnet | Ephemeral | `https://mainnet-beta-eu.magicblock.app` |
+| Network | Layer      | Endpoint                                 |
+| ------- | ---------- | ---------------------------------------- |
+| Devnet  | Base Layer | `https://api.devnet.solana.com`          |
+| Devnet  | Ephemeral  | `https://devnet-eu.magicblock.app`       |
+| Mainnet | Base Layer | `https://api.mainnet-beta.solana.com`    |
+| Mainnet | Ephemeral  | `https://mainnet-beta-eu.magicblock.app` |
 
 World/state creates and NFT operations go to the Base Layer. State writes go to the Ephemeral layer.
 
@@ -402,4 +552,4 @@ cargo test
 
 ## License
 
-MIT OR Apache-2.0 — see [LICENSE](LICENSE).
+MIT OR Apache-2.0 — see [LICENSE-APACHE](LICENSE-APACHE) and [LICENSE-MIT](LICENSE-MIT).

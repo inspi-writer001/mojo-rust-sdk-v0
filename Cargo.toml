@@ -8,10 +8,11 @@ repository = "https://github.com/inspi-writer001/mojo-rust-sdk-v0"
 readme = "README.md"
 keywords = ["solana", "gaming", "metaplex", "magicblock", "pinocchio"]
 categories = [
-    "blockchain-utilities",
+    "cryptography::cryptocurrencies",
     "game-development",
     "wasm",
-    "cryptography",
+    "web-programming",
+    "development-tools",
 ]
 
 [features]

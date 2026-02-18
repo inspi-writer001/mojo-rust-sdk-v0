@@ -6,7 +6,7 @@ description = "A high-performance Solana gaming SDK designed to totally abstract
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/inspi-writer001/mojo-rust-sdk-v0"
 readme = "README.md"
-keywords = ["solana", "gaming", "metaplex", "magicblock", "leptos", "pinocchio"]
+keywords = ["solana", "gaming", "metaplex", "magicblock", "pinocchio"]
 categories = [
     "blockchain-utilities",
     "game-development",

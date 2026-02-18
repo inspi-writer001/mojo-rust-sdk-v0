@@ -1,6 +1,6 @@
 [package]
 name = "mojo-rust-sdk"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A high-performance Solana gaming SDK designed to totally abstract the complexities of managing state in onchain games/applications powered by Magicblock, Metaplex, Pinocchio"
 license = "MIT OR Apache-2.0"

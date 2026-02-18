@@ -19,7 +19,7 @@ NFT operations (profile pictures, character collections, character minting) go d
 
 ```toml
 [dependencies]
-mojo-rust-sdk = { git = "https://github.com/inspi-writer001/mojo-rust-sdk-v0" }
+mojo-rust-sdk = "0.1.1"
 ```
 
 ### Feature Flags
@@ -37,19 +37,19 @@ The core layer — types, instruction builders, `TransactionBundle`, the `mojo!`
 **Full SDK (default):**
 
 ```toml
-mojo-rust-sdk = { git = "..." }
+mojo-rust-sdk = { version = "..." }
 ```
 
 **Frontend / WASM (instruction builders only, no RPC):**
 
 ```toml
-mojo-rust-sdk = { git = "...", default-features = false }
+mojo-rust-sdk = { version = "...", default-features = false }
 ```
 
 **Native RPC without Arweave (bring your own upload):**
 
 ```toml
-mojo-rust-sdk = { git = "...", default-features = false, features = ["native"] }
+mojo-rust-sdk = { version = "...", default-features = false, features = ["native"] }
 ```
 
 ---
